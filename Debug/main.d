@@ -1,6 +1,7 @@
 # FIXED
 
 main.obj: ../main.c
+main.obj: ../Settings.h
 main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/include/F28x_Project.h
 main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/include/F2837xD_Cla_typedefs.h
 main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_headers/include/F2837xD_device.h
@@ -67,6 +68,15 @@ main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/include/
 main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/include/F2837xD_defaultisr.h
 main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/include/F2837xD_Ipc_drivers.h
 main.obj: ../Settings.h
+main.obj: ../PMSM_struct.h
+main.obj: ../state_machine.h
+main.obj: ../endat.h
+main.obj: C:/Users/Flanker/Documents/CCS_10_1/Inverter_Build/Float/include/PM_endat22_Include.h
+main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/inc/hw_can.h
+main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/driverlib/can.h
+main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/inc/hw_memmap.h
+main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/driverlib/uart.h
+main.obj: ../SciStdio.h
 main.obj: C:/ti/controlSUITE/libs/math/IQmath/v160/include/IQmathLib.h
 main.obj: C:/ti/ccs1011/ccs/tools/compiler/ti-cgt-c2000_20.2.1.LTS/include/math.h
 main.obj: C:/ti/ccs1011/ccs/tools/compiler/ti-cgt-c2000_20.2.1.LTS/include/_defs.h
@@ -82,17 +92,13 @@ main.obj: C:/ti/controlSUITE/libs/app_libs/motor_control/math_blocks/v4.3/svgen.
 main.obj: C:/ti/controlSUITE/libs/app_libs/motor_control/math_blocks/v4.3/rampgen.h
 main.obj: C:/ti/controlSUITE/libs/app_libs/motor_control/math_blocks/v4.3/rmp_cntl.h
 main.obj: C:/Users/Flanker/Documents/CCS_10_1/Inverter_Build/utility\ Src\ Files/DLOG_4CH_F.h
-main.obj: ../PMSM_struct.h
-main.obj: ../state_machine.h
-main.obj: ../endat.h
-main.obj: C:/Users/Flanker/Documents/CCS_10_1/Inverter_Build/Float/include/PM_endat22_Include.h
-main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/inc/hw_can.h
-main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/driverlib/can.h
-main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/inc/hw_memmap.h
-main.obj: C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/driverlib/uart.h
-main.obj: ../SciStdio.h
+main.obj: C:/Users/Flanker/Documents/CCS_10_1/Inverter_Build/utility\ Src\ Files/MESSAGE_F.h
+main.obj: C:/ti/controlSUITE/libs/app_libs/motor_control/math_blocks/v4.3/speed_fr.h
+main.obj: ../F2837x_QEP_Module.h
+main.obj: ../f2837xbmsk.h
 
 ../main.c: 
+../Settings.h: 
 C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/include/F28x_Project.h: 
 C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/include/F2837xD_Cla_typedefs.h: 
 C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_headers/include/F2837xD_device.h: 
@@ -159,6 +165,15 @@ C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/include/F2837xD_Up
 C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/include/F2837xD_defaultisr.h: 
 C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/include/F2837xD_Ipc_drivers.h: 
 ../Settings.h: 
+../PMSM_struct.h: 
+../state_machine.h: 
+../endat.h: 
+C:/Users/Flanker/Documents/CCS_10_1/Inverter_Build/Float/include/PM_endat22_Include.h: 
+C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/inc/hw_can.h: 
+C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/driverlib/can.h: 
+C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/inc/hw_memmap.h: 
+C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/driverlib/uart.h: 
+../SciStdio.h: 
 C:/ti/controlSUITE/libs/math/IQmath/v160/include/IQmathLib.h: 
 C:/ti/ccs1011/ccs/tools/compiler/ti-cgt-c2000_20.2.1.LTS/include/math.h: 
 C:/ti/ccs1011/ccs/tools/compiler/ti-cgt-c2000_20.2.1.LTS/include/_defs.h: 
@@ -174,12 +189,7 @@ C:/ti/controlSUITE/libs/app_libs/motor_control/math_blocks/v4.3/svgen.h:
 C:/ti/controlSUITE/libs/app_libs/motor_control/math_blocks/v4.3/rampgen.h: 
 C:/ti/controlSUITE/libs/app_libs/motor_control/math_blocks/v4.3/rmp_cntl.h: 
 C:/Users/Flanker/Documents/CCS_10_1/Inverter_Build/utility\ Src\ Files/DLOG_4CH_F.h: 
-../PMSM_struct.h: 
-../state_machine.h: 
-../endat.h: 
-C:/Users/Flanker/Documents/CCS_10_1/Inverter_Build/Float/include/PM_endat22_Include.h: 
-C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/inc/hw_can.h: 
-C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/driverlib/can.h: 
-C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/inc/hw_memmap.h: 
-C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/driverlib/uart.h: 
-../SciStdio.h: 
+C:/Users/Flanker/Documents/CCS_10_1/Inverter_Build/utility\ Src\ Files/MESSAGE_F.h: 
+C:/ti/controlSUITE/libs/app_libs/motor_control/math_blocks/v4.3/speed_fr.h: 
+../F2837x_QEP_Module.h: 
+../f2837xbmsk.h: 

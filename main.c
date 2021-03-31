@@ -11,22 +11,7 @@
 *
 ***************************************************************************/
 
-#include "F28x_Project.h"
-#include "F2837xD_Ipc_drivers.h"
 #include "Settings.h"
-//#include "stdint.h"
-
-#include "PMSM_struct.h"
-#include "state_machine.h"
-
-#include "endat.h"
-
-#include "inc/hw_can.h"
-#include "driverlib/can.h"
-
-#include "inc/hw_memmap.h"//UARTA_BASE
-#include "driverlib/uart.h"//UARTEnable
-#include "SciStdio.h"
 
 
 
@@ -42,8 +27,6 @@
 #define BLINKY_LED_GPIO    31
 #define DELAY (CPU_RATE/1000*6*510)  //Qual period at 6 samples
 
-//TODO
-#define ENCODER_TYPE	21
 /******************************************************************************
 * Local function prototypes
 ******************************************************************************/
@@ -53,28 +36,30 @@ static bool faultDetect(pmsmFOC_t *ptr);
 
 void InitLED();
 void CAN_A_init();
-//void InitEPwm1Example(void);
 void epwm_init();
 void InitEPwm1ch_UpDwnCnt_CNF(int16 n, Uint16 period, int16 db);
 void InitEPWM_1ch_UpCnt_CNF(int16 n, Uint16 period);
-//void InitEPwm2Example(void);
-//void InitEPwm3Example(void);
-__interrupt void epwm1_isr(void);
-__interrupt void epwm2_isr(void);
-__interrupt void epwm3_isr(void);
+void HVDMC_Protection(void);
+void cmpssConfig(volatile struct CMPSS_REGS *v, int16 Hi, int16 Lo);
+
+//__interrupt void epwm1_isr(void);
+//__interrupt void epwm2_isr(void);
+//__interrupt void epwm3_isr(void);
 
 void adc_init();
 void adc_dac_configure();
 void uart_init();
 void enDat_init();
 void param_init();
+
+void mc34_init();
 /* Interrupt functions */
 //#pragma INTERRUPT (ResolverISR, HPI)
 #pragma INTERRUPT (FOC_Fast_ISR, LPI)
 
 // Prototype statements for functions found within this file.
 interrupt void FOC_Fast_ISR(void);// 10kHz interrupt.
-//interrupt void ResolverISR(void);
+interrupt void Message_Transmit(void);//200Hz
 
 //void scia_init();  //init the scia and uart param
 
@@ -87,6 +72,7 @@ static volatile uint32_t canTxCounter =0 ;
 static volatile uint32_t canOfflineCounter =0 ;
 static volatile bool canOfflineDetectOn	= false;    // flag for CAN offline detect on
 static unsigned char count_state=0;
+int16 OffsetCalCounter;
 
 unsigned char ucTXMsgData[4] = {1,2,3,4};
 unsigned char ucRXMsgData[4];
@@ -96,14 +82,40 @@ uint16_t crc5_self;
  * ----------------------------------*/
 pmsmFOC_t 			FOC;
 Uint32 IsrTicker = 0;
+Uint32 IsrTxTicker = 1; //avoid being triggered with DATALOG in the same loop
+
+Uint16
+//BackTicker = 0,
+       lsw = 0,
+//       TripFlagDMC = 0,				//PWM trip status
+//       clearTripFlagDMC = 0,
+       RunMotor = 0;
+// Instance a QEP interface driver
+QEP qep1 = QEP_DEFAULTS;
+
 int test=0;
+
+interrupt void adca1_isr(void)
+{
+//    AdcaResults[resultsIndex++] = AdcaResultRegs.ADCRESULT0;
+//    if(RESULTS_BUFFER_SIZE <= resultsIndex)
+//    {
+//        resultsIndex = 0;
+//        bufferFull = 1;
+//    }
+	//gpio29
+	EALLOW;
+    GpioDataRegs.GPATOGGLE.bit.GPIO29=1;
+	EDIS;
+    AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1; //clear INT1 flag
+    PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
+}
 
 void main(void)
 {
 
 //    unsigned int DCVoltage =0xF00F;
-    unsigned char Byte1;
-    unsigned char Byte2;
+
 
     volatile int status = 0;
 
@@ -135,7 +147,10 @@ void main(void)
     //TODO GPIO CAN initializing
 //    CAN_A_init();
 
-    //TODO GPIO&Understand PWM initializing
+    // init gd3000
+    mc34_init();
+
+    // GPIO&Understand PWM initializing
     epwm_init();
 
 
@@ -143,10 +158,21 @@ void main(void)
 //    ctu0_init();
 
     //TODO understand&GPIO ADC DAC initializing
+//    InitGpio();
+    EALLOW;
+//    GpioCtrlRegs.GPALOCK.bit.GPIO29=0;
+        GpioCtrlRegs.GPAMUX2.bit.GPIO29=0;
+        GpioCtrlRegs.GPADIR.bit.GPIO29=1;
+//    GPIO_SetupPinOptions(29, GPIO_OUTPUT, GPIO_PUSHPULL);  // 方向为输出
+//	GPIO_SetupPinMux(29, GPIO_MUX_CPU1, 1);
+	GpioDataRegs.GPATOGGLE.bit.GPIO29=1;
+
+
+    EDIS;
     adc_init();
     adc_dac_configure();
 
-	//TODO GPIO Initialize UART
+	// GPIO Initialize UART
 	uart_init();
 
     // SPI initializing
@@ -183,19 +209,21 @@ void main(void)
 
 //	PieVectTable.ADCC1_INT = &ResolverISR;
 	PieVectTable.EPWM11_INT = &FOC_Fast_ISR;
+	PieVectTable.ADCA1_INT = &adca1_isr; //function for ADCA interrupt 1
 
-	PieCtrlRegs.PIEIER3.bit.INTx11 = 1;  // Enable PWM11INT in PIE group 3
+	PieCtrlRegs.PIEIER3.bit.INTx11 = 1;  // Enable PWM11INT in PIE group 3 priority 11
+	PieCtrlRegs.PIEIER1.bit.INTx1 = 1;   //priority 1
 //	PieCtrlRegs.PIEIER1.bit.INTx3  = 1;  // Enable ADCC1INT in PIE group 1
 
 	EPwm11Regs.ETCLR.bit.INT=1;
 	EDIS;
 
 
-	//TODO set initial state for the state machines
+	// set initial state for the state machines
 	FOC.ctrlState.state   = reset;
 	FOC.ctrlState.event   = e_reset;
 
-	//TODO first call to state machines
+	// first call to state machines
 	SCIPuts("\r\n ============Test Start===========.\r\n", -1);
 	state_table[FOC.ctrlState.event][FOC.ctrlState.state](&FOC);
 //	state_LED[FOC.ctrlState.state]();
@@ -215,7 +243,7 @@ void main(void)
 
         DELAY_US(50*500);
 
-        state_table[FOC.ctrlState.event][FOC.ctrlState.state](&FOC);
+//        state_table[FOC.ctrlState.event][FOC.ctrlState.state](&FOC);
 
         GPIO_WritePin(BLINKY_LED_GPIO, 1);
 
@@ -226,7 +254,7 @@ void main(void)
 }
 
 /**************************************************************************//*!
-@brief          CTU0-trigger0 interrupt service routine
+@brief          interrupt service routine
 
 @param[in,out]  void
 @param[in]      void
@@ -243,6 +271,13 @@ void main(void)
 @warning		none
 ******************************************************************************/
 interrupt void FOC_Fast_ISR(void){
+	//	//FOC.encoder.position=enDat_getPosition();
+	//
+	//	// get encoder position
+	//	encoder_calc_mec_radian(&FOC);
+	//	encoder_calc_mec_degree(&FOC);
+	//	encoder_calc_elec_degree(&FOC);
+	//	encoder_calc_RPM(&FOC, 10000);
 	EINT;
 
 	// Verifying the ISR
@@ -253,9 +288,38 @@ interrupt void FOC_Fast_ISR(void){
 //	  Checks target independent modules, duty cycle waveforms and PWM update
 //	  Keep the motors disconnected at this level
 // ==============================================================================
+// =============================== LEVEL 2 ======================================
+//	  Level 2 verifies
+//	     - all current sense schems
+//         - analog-to-digital conversion (shunt and LEM)
+//         - SDFM function
+//       - Current Limit Settings for over current protection
+//       - clarke/park transformations (CLARKE/PARK)
+//       - Position sensor interface
+//         - speed estimation
+// ==============================================================================
 
-//TODO BUILD 1
-#if (BUILDLEVEL == LEVEL1)
+//TODO BUILD 2
+#if (BUILDLEVEL == LEVEL2)
+	// ------------------------------------------------------------------------------
+	// Alignment Routine: this routine aligns the motor to zero electrical angle
+	// and in case of QEP also finds the index location and initializes the angle
+	// w.r.t. the index location
+	// ------------------------------------------------------------------------------
+	if(!RunMotor)
+		lsw = 0;
+	else if (lsw == 0)
+	{
+		// for restarting from (RunMotor = 0)
+		rc1.TargetValue =  rc1.SetpointValue = 0;
+
+#if POSITION_ENCODER==QEP_POS_ENCODER
+		lsw = 1;   // for QEP, spin the motor to find the index pulse
+//#else
+//		lsw  = 2;  // for absolute encoders no need for lsw=1
+
+#endif
+	} // end else if (lsw=0)
 
 // ------------------------------------------------------------------------------
 //  Connect inputs of the RMP module and call the ramp control macro
@@ -272,6 +336,28 @@ interrupt void FOC_Fast_ISR(void){
 //		rg1.Out+=_IQ(_IQdiv(1,360));
 //	else
 //		rg1.Out=_IQ(0.0);
+// ------------------------------------------------------------------------------
+//  Measure phase currents, subtract the offset and normalize from (-0.5,+0.5) to (-1,+1).
+//	Connect inputs of the CLARKE module and call the clarke transformation macro
+// ------------------------------------------------------------------------------
+//	currentSensorSuite();
+	current_sensor.As   = (float)IFB_LEMV_PPB* ADC_PU_PPB_SCALE_FACTOR * LEM_TO_SHUNT;
+	current_sensor.Bs   = (float)IFB_LEMW_PPB* ADC_PU_PPB_SCALE_FACTOR * LEM_TO_SHUNT;
+	current_sensor.Cs   = (float)IFB_LEMU_PPB* ADC_PU_PPB_SCALE_FACTOR * LEM_TO_SHUNT;
+			//-current_sensor[LEM_CURRENT_SENSE-1].Cs-current_sensor[LEM_CURRENT_SENSE-1].Bs;
+
+	clarke1.As = current_sensor.As; // Phase A curr.
+	clarke1.Bs = current_sensor.Bs; // Phase B curr.
+	CLARKE_MACRO(clarke1)
+// ------------------------------------------------------------------------------
+//  Connect inputs of the PARK module and call the park trans. macro
+// ------------------------------------------------------------------------------
+	park1.Alpha  = clarke1.Alpha;
+	park1.Beta   = clarke1.Beta;
+	park1.Angle  = rg1.Out;
+	park1.Sine   = __sinpuf32(park1.Angle);
+	park1.Cosine = __cospuf32(park1.Angle);
+	PARK_MACRO(park1)
 
 // ------------------------------------------------------------------------------
 //  Connect inputs of the INV_PARK module and call the inverse park trans. macro
@@ -282,13 +368,63 @@ interrupt void FOC_Fast_ISR(void){
     ipark1.Ds = VdTesting;
     ipark1.Qs = VqTesting;
 
-    park1.Angle  = rg1.Out;
-	park1.Sine   = __sinpuf32(park1.Angle);
-	park1.Cosine = __cospuf32(park1.Angle);
+//    park1.Angle  = rg1.Out;
+//	park1.Sine   = __sinpuf32(park1.Angle);
+//	park1.Cosine = __cospuf32(park1.Angle);
 
 	ipark1.Sine=park1.Sine;
     ipark1.Cosine=park1.Cosine;
 	IPARK_MACRO(ipark1)
+
+// ------------------------------------------------------------------------------
+//   Position encoder suite module
+// ------------------------------------------------------------------------------
+//	posEncoderSuite();  // if needed reverse the sense of position in this module
+
+// ----------------------------------
+// lsw = 0 ---> Alignment Routine
+// ----------------------------------
+#if (POSITION_ENCODER == QEP_POS_ENCODER)
+	if (lsw == 0)
+	{
+		// during alignment, assign the current shaft position as initial position
+		EQep1Regs.QPOSCNT = 0;
+		EQep1Regs.QCLR.bit.IEL = 1;  // Reset position cnt for QEP
+	} // end if (lsw=0)
+
+// ******************************************************************************
+//    Detect calibration angle and call the QEP module
+// ******************************************************************************
+	// for once the QEP index pulse is found, go to lsw=2
+	if(lsw==1)
+	{
+		if (EQep1Regs.QFLG.bit.IEL == 1)			// Check the index occurrence
+		{
+			qep1.CalibratedAngle=EQep1Regs.QPOSILAT;
+//			EQep1Regs.QPOSINIT = EQep1Regs.QPOSILAT; //new
+//			EQep1Regs.QEPCTL.bit.IEI = IEI_RISING;   // new
+			lsw=2;
+		}   // Keep the latched pos. at the first index
+	}
+
+	if (lsw!=0){
+		QEP_MACRO(1,qep1);
+	}
+
+	// Reverse the sense of position if needed - comment / uncomment accordingly
+	// Position Sense as is
+	posEncElecTheta[QEP_POS_ENCODER] = qep1.ElecTheta;
+	posEncMechTheta[QEP_POS_ENCODER] = qep1.MechTheta;
+
+//	// Position Sense Reversal
+//	posEncElecTheta[QEP_POS_ENCODER] = 1.0 - qep1.ElecTheta;
+//	posEncMechTheta[QEP_POS_ENCODER] = 1.0 - qep1.MechTheta;
+#endif
+// ------------------------------------------------------------------------------
+//    Connect inputs of the SPEED_FR module and call the speed calculation macro
+// ------------------------------------------------------------------------------
+	speed1.ElecTheta = posEncElecTheta[POSITION_ENCODER];
+	SPEED_FR_MACRO(speed1)
 
 // ------------------------------------------------------------------------------
 //  Connect inputs of the SVGEN_DQ module and call the space-vector gen. macro
@@ -300,17 +436,19 @@ interrupt void FOC_Fast_ISR(void){
 // ------------------------------------------------------------------------------
 //  Computed Duty and Write to CMPA register
 // ------------------------------------------------------------------------------
- 	EPwm1Regs.CMPA.bit.CMPA = (INV_PWM_HALF_TBPRD*svgen1.Ta)+INV_PWM_HALF_TBPRD;
-	EPwm2Regs.CMPA.bit.CMPA = (INV_PWM_HALF_TBPRD*svgen1.Tb)+INV_PWM_HALF_TBPRD;
-	EPwm3Regs.CMPA.bit.CMPA = (INV_PWM_HALF_TBPRD*svgen1.Tc)+INV_PWM_HALF_TBPRD;
+ 	EPwm1Regs.CMPA.bit.CMPA = (INV_PWM_HALF_TBPRD*svgen1.Tc*10)+INV_PWM_HALF_TBPRD;
+	EPwm2Regs.CMPA.bit.CMPA = (INV_PWM_HALF_TBPRD*svgen1.Ta*10)+INV_PWM_HALF_TBPRD;
+	EPwm3Regs.CMPA.bit.CMPA = (INV_PWM_HALF_TBPRD*svgen1.Tb*10)+INV_PWM_HALF_TBPRD;
 
 // ------------------------------------------------------------------------------
 //  Connect inputs of the DATALOG module
 // ------------------------------------------------------------------------------
 	DlogCh1 = rg1.Out;
 	DlogCh2 = svgen1.Ta;
-	DlogCh3 = svgen1.Tb;
-	DlogCh4 = svgen1.Tc;
+//	DlogCh3 = svgen1.Tb;
+//	DlogCh4 = svgen1.Tc;
+	DlogCh3 = clarke1.Alpha;
+	DlogCh4 = clarke1.Beta;
 
 //------------------------------------------------------------------------------
 // Variable display on DACs B and C
@@ -326,27 +464,36 @@ interrupt void FOC_Fast_ISR(void){
 //		test++;
 //	else
 //		test=0;
-	DacbRegs.DACVALS.bit.DACVALS = (svgen1.Tb*0.5+0.5)*4096;
-	DacaRegs.DACVALS.bit.DACVALS = (svgen1.Tc*0.5+0.5)*4096;
+//	DacbRegs.DACVALS.bit.DACVALS = (svgen1.Tb*0.5+0.5)*4096;
+//	DacaRegs.DACVALS.bit.DACVALS = (svgen1.Tc*0.5+0.5)*4096;
+//	DacbRegs.DACVALS.bit.DACVALS = (unsigned int)((clarke1.Alpha+4.0)*512.0);
+//	DacaRegs.DACVALS.bit.DACVALS = (unsigned int)((clarke1.Beta+4.0)*512.0);
+	DacbRegs.DACVALS.bit.DACVALS = rg1.Out*4096;
+	DacaRegs.DACVALS.bit.DACVALS = posEncElecTheta[POSITION_ENCODER]*4096;
 //	}
 
-#endif // (BUILDLEVEL==LEVEL1)
+#endif // (BUILDLEVEL==LEVEL2)
 
 // ------------------------------------------------------------------------------
 //    Call the DATALOG update function.
 // ------------------------------------------------------------------------------
 	DLOG_4CH_F_FUNC(&dlog_4ch1);
 
+//	if(IsrTxTicker==49){
+//		IsrTxTicker=0;
+//		ActualValues1.DCVoltage=AdcaResultRegs.ADCRESULT0;
+//		ActualValues1.ActualTorque=AdcbResultRegs.ADCRESULT0;
+//		ActualValues1.ActualVelocity=AdccResultRegs.ADCRESULT0;
+//		ACTUALVALUE1_uart_TX(&ActualValues1, UARTA_BASE);
+//		ACTUALVALUE2_uart_TX(&ActualValues2, UARTA_BASE);
+//	}
+//	else
+//		IsrTxTicker++;
+
 	EPwm11Regs.ETCLR.bit.INT = 1;
     PieCtrlRegs.PIEACK.all   = PIEACK_GROUP3;
     EDIS;
-//	//FOC.encoder.position=enDat_getPosition();
-//
-//	// get encoder position
-//	encoder_calc_mec_radian(&FOC);
-//	encoder_calc_mec_degree(&FOC);
-//	encoder_calc_elec_degree(&FOC);
-//	encoder_calc_RPM(&FOC, 10000);
+
 //
 //
 //	//wait for ADC converted done
@@ -562,7 +709,7 @@ void stateRun(pmsmFOC_t *ptr){
 ******************************************************************************/
 void stateFault(pmsmFOC_t *ptr){
 }
-//TODO configure LED
+// configure LED
 void InitLED()
 {
 #if (BUILDTYPE==LAUNCHPAD)
@@ -623,6 +770,63 @@ void CAN_A_init()
 //	//配置message object用于接受
 //	CANMessageSet(CANA_BASE, 2, &sRXCANMessage, MSG_OBJ_TYPE_RX);
 }
+void mc34_init(){
+
+	EALLOW;
+	//rst_gpio
+	GPIO_SetupPinOptions(24, GPIO_OUTPUT, GPIO_PUSHPULL);  // 方向为输出
+	GPIO_SetupPinMux(24, GPIO_MUX_CPU1, 0);                // 选择引脚功能为GPIO功能
+	//en1&en2
+	GPIO_SetupPinOptions(16, GPIO_OUTPUT, GPIO_PUSHPULL);
+	GPIO_SetupPinMux(16, GPIO_MUX_CPU1, 0);
+	//initialize outputs
+	GPIO_SetupPinOptions(0, GPIO_OUTPUT, GPIO_PUSHPULL);
+	GPIO_SetupPinMux(0, GPIO_MUX_CPU1, 0);
+	GPIO_SetupPinOptions(1, GPIO_OUTPUT, GPIO_PUSHPULL);
+	GPIO_SetupPinMux(1, GPIO_MUX_CPU1, 0);
+	GPIO_SetupPinOptions(2, GPIO_OUTPUT, GPIO_PUSHPULL);
+	GPIO_SetupPinMux(2, GPIO_MUX_CPU1, 0);
+	GPIO_SetupPinOptions(3, GPIO_OUTPUT, GPIO_PUSHPULL);
+	GPIO_SetupPinMux(3, GPIO_MUX_CPU1, 0);
+	GPIO_SetupPinOptions(4, GPIO_OUTPUT, GPIO_PUSHPULL);
+	GPIO_SetupPinMux(4, GPIO_MUX_CPU1, 0);
+	GPIO_SetupPinOptions(5, GPIO_OUTPUT, GPIO_PUSHPULL);
+	GPIO_SetupPinMux(5, GPIO_MUX_CPU1, 0);
+	EDIS;
+
+	GPIO_WritePin(24, 1);// RST置1
+	DELAY_US(100);
+	GPIO_WritePin(16, 1);// EN置1
+	DELAY_US(100);
+	//Px_HS&LS->0
+	GPIO_WritePin(0, 0);
+	GPIO_WritePin(1, 0);
+	GPIO_WritePin(2, 0);
+	GPIO_WritePin(3, 0);
+	GPIO_WritePin(4, 0);
+	GPIO_WritePin(5, 0);
+	//Px_HS->1
+	GPIO_WritePin(0, 1);
+	GPIO_WritePin(2, 1);
+	GPIO_WritePin(4, 1);
+	//Px_LS->1
+	GPIO_WritePin(1, 1);
+	GPIO_WritePin(3, 1);
+	GPIO_WritePin(5, 1);
+	DELAY_US(100);//wait capacitors to charge
+	//Px_LS->0
+	GPIO_WritePin(1, 0);
+	GPIO_WritePin(3, 0);
+	GPIO_WritePin(5, 0);
+	//Px_HS->0
+	GPIO_WritePin(0, 0);
+	GPIO_WritePin(2, 0);
+	GPIO_WritePin(4, 0);
+	//Px_HS->1
+	GPIO_WritePin(0, 1);
+	GPIO_WritePin(2, 1);
+	GPIO_WritePin(4, 1);
+}
 void epwm_init()
 {
     EALLOW;
@@ -650,6 +854,8 @@ void epwm_init()
 	//PWM 11 for syncing up the SD filter windows with motor control PWMs
 	// ********************************************************************
 	InitEPWM_1ch_UpCnt_CNF(11,INV_PWM_TICKS);
+
+
 
     // configure 2 and 3 as slaves
 	EPwm2Regs.TBCTL.bit.SYNCOSEL = TB_SYNC_IN;
@@ -708,6 +914,14 @@ void InitEPwm1ch_UpDwnCnt_CNF(int16 n, Uint16 period, int16 db)
 	(*ePWM[n]).CMPCTL.bit.SHDWAMODE = CC_SHADOW; // Load registers every ZERO
 	(*ePWM[n]).CMPCTL.bit.LOADAMODE = CC_CTR_ZERO;
 
+//	// Action Qualifier SubModule Registers
+//	(*ePWM[n]).AQCTLA.bit.CAU = AQ_CLEAR;   //output low
+//	(*ePWM[n]).AQCTLA.bit.CAD = AQ_SET;     //output high
+//
+//	// Active high complementary PWMs - Set up the deadband
+//	(*ePWM[n]).DBCTL.bit.IN_MODE  = DBA_ALL;
+//	(*ePWM[n]).DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
+//	(*ePWM[n]).DBCTL.bit.POLSEL   = DB_ACTV_HIC;
 	// Action Qualifier SubModule Registers
 	(*ePWM[n]).AQCTLA.bit.CAU = AQ_CLEAR;   //output low
 	(*ePWM[n]).AQCTLA.bit.CAD = AQ_SET;     //output high
@@ -715,7 +929,7 @@ void InitEPwm1ch_UpDwnCnt_CNF(int16 n, Uint16 period, int16 db)
 	// Active high complementary PWMs - Set up the deadband
 	(*ePWM[n]).DBCTL.bit.IN_MODE  = DBA_ALL;
 	(*ePWM[n]).DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
-	(*ePWM[n]).DBCTL.bit.POLSEL   = DB_ACTV_HIC;
+	(*ePWM[n]).DBCTL.bit.POLSEL   = DB_ACTV_LO;
 	(*ePWM[n]).DBRED.bit.DBRED = db;
 	(*ePWM[n]).DBFED.bit.DBFED = db;
 
@@ -836,9 +1050,9 @@ void adc_dac_configure()
 	EALLOW;
 
 	// Analog signals that are sampled
-	//  CUR-U-MCU ADC-IN-A2
-	//	CUR-V-MCU ADC-IN-B2
-	//	CUR-W-MCU ADC-IN-C2
+	//  CUR-U-MCU ADC-IN-C2
+	//	CUR-V-MCU ADC-IN-A2
+	//	CUR-W-MCU ADC-IN-B2
 	//	TEMP-H-MCU ADC-IN-D3
 	//	TEMP-D-MCU ADC-IN-D2
 	//	TEMP-M-MCU ADC-IN-D1
@@ -849,27 +1063,30 @@ void adc_dac_configure()
 	// hencce ACQPS on soprano is 133/5~30
 
 	// Configure the SOC0 on ADC a-d
-	//  CUR-U-MCU ADC-IN-A2
+	//  CUR-V-MCU ADC-IN-A2
 	// ********************************
-	AdcaRegs.ADCSOC0CTL.bit.CHSEL     = 2;    // SOC0 will convert pin A4
+	AdcaRegs.ADCSOC0CTL.bit.CHSEL     = 2;    // SOC0 will convert pin A2
 	AdcaRegs.ADCSOC0CTL.bit.ACQPS     = 30;   // sample window in SYSCLK cycles
 	AdcaRegs.ADCSOC0CTL.bit.TRIGSEL   = 5;    // trigger on ePWM1 SOCA/C
+	AdcaRegs.ADCINTSEL1N2.bit.INT1SEL = 0; //end of SOC0 will set INT1 flag
+	AdcaRegs.ADCINTSEL1N2.bit.INT1E = 1;   //enable INT1 flag
+	AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1; //make sure INT1 flag is cleared
 	// Configure the post processing block (PPB) to eliminate subtraction related calculation
 	AdcaRegs.ADCPPB1CONFIG.bit.CONFIG = 0;    // PPB is associated with SOC0
 	AdcaRegs.ADCPPB1OFFCAL.bit.OFFCAL = 0;    // Write zero to this for now till offset ISR is run
-	//	CUR-V-MCU ADC-IN-B2
+	//	CUR-W-MCU ADC-IN-B2
 	// ********************************
-	AdcbRegs.ADCSOC0CTL.bit.CHSEL     = 2;    // SOC0 will convert pin B4
+	AdcbRegs.ADCSOC0CTL.bit.CHSEL     = 2;    // SOC0 will convert pin B2
 	AdcbRegs.ADCSOC0CTL.bit.ACQPS     = 30;   // sample window in SYSCLK cycles
 	AdcbRegs.ADCSOC0CTL.bit.TRIGSEL   = 5;    // trigger on ePWM1 SOCA/C
 	// Configure PPB to eliminate subtraction related calculation
 	AdcbRegs.ADCPPB1CONFIG.bit.CONFIG = 0;    // PPB is associated with SOC0
 	AdcbRegs.ADCPPB1OFFCAL.bit.OFFCAL = 0;    // Write zero to this for now till offset ISR is run
-	//	CUR-W-MCU ADC-IN-C2
+	//	CUR-U-MCU ADC-IN-C2
 	// ********************************
-	AdccRegs.ADCSOC0CTL.bit.CHSEL     = 2;   // SOC0 will convert pin C15
+	AdccRegs.ADCSOC0CTL.bit.CHSEL     = 2;   // SOC0 will convert pin C2
 	AdccRegs.ADCSOC0CTL.bit.ACQPS     = 30;   // sample window in SYSCLK cycles
-	AdccRegs.ADCSOC0CTL.bit.TRIGSEL   = 15;   // trigger on ePWM6 SOCA/C
+	AdccRegs.ADCSOC0CTL.bit.TRIGSEL   = 5;   // trigger on ePWM1 SOCA/C
 	// Configure PPB to eliminate subtraction related calculation
 	AdccRegs.ADCPPB1CONFIG.bit.CONFIG = 0;    // PPB is associated with SOC0
 	AdccRegs.ADCPPB1OFFCAL.bit.OFFCAL = 0;    // Write zero to this for now till offset ISR is run
@@ -877,19 +1094,19 @@ void adc_dac_configure()
 	//TODO trigger to be specify
 	//	V-DC-MCU ADC-IN-D0
 	// ********************************
-	AdcdRegs.ADCSOC0CTL.bit.CHSEL     = 0;    // SOC0 will convert pin D1
+	AdcdRegs.ADCSOC0CTL.bit.CHSEL     = 0;    // SOC0 will convert pin D0
 	AdcdRegs.ADCSOC0CTL.bit.ACQPS     = 30;   // sample window in SYSCLK cycles
 	AdcdRegs.ADCSOC0CTL.bit.TRIGSEL   = 15;   // trigger on ePWM6 SOCA/C
 
 	//	V24-MCU ADC-IN-D4
 	// ********************************
-	AdcdRegs.ADCSOC1CTL.bit.CHSEL     = 4;    // SOC1 will convert pin D1
+	AdcdRegs.ADCSOC1CTL.bit.CHSEL     = 4;    // SOC1 will convert pin D4
 	AdcdRegs.ADCSOC1CTL.bit.ACQPS     = 30;   // sample window in SYSCLK cycles
 	AdcdRegs.ADCSOC1CTL.bit.TRIGSEL   = 15;   // trigger on ePWM6 SOCA/C
 
 	//	TEMP-H-MCU ADC-IN-D3
 	// ********************************
-	AdcdRegs.ADCSOC2CTL.bit.CHSEL     = 3;    // SOC2 will convert pin D1
+	AdcdRegs.ADCSOC2CTL.bit.CHSEL     = 3;    // SOC2 will convert pin D3
 	AdcdRegs.ADCSOC2CTL.bit.ACQPS     = 30;   // sample window in SYSCLK cycles
 	AdcdRegs.ADCSOC2CTL.bit.TRIGSEL   = 15;   // trigger on ePWM6 SOCA/C
 	// Configure PPB to eliminate subtraction related calculation
@@ -897,7 +1114,7 @@ void adc_dac_configure()
 	AdcdRegs.ADCPPB1OFFCAL.bit.OFFCAL = 0;    // Write zero to this for now till offset ISR is run
 	//	TEMP-D-MCU ADC-IN-D2
 	// ********************************
-	AdcdRegs.ADCSOC3CTL.bit.CHSEL     = 2;    // SOC3 will convert pin D1
+	AdcdRegs.ADCSOC3CTL.bit.CHSEL     = 2;    // SOC3 will convert pin D2
 	AdcdRegs.ADCSOC3CTL.bit.ACQPS     = 30;   // sample window in SYSCLK cycles
 	AdcdRegs.ADCSOC3CTL.bit.TRIGSEL   = 15;   // trigger on ePWM6 SOCA/C
 	// Configure PPB to eliminate subtraction related calculation
@@ -1034,34 +1251,56 @@ void uart_init()
 
     // Enable the UART.
     UARTEnable(UARTA_BASE);
-//    for(i=0;i<100;i++)
-//    {
-//    	voltage[i]=i;
-//    }
-//    for(i=0;i<100;i++)
-//	{
-//		voltage[i+100]=100-i;
-//	}
-//    i=0;
+
 }
 void param_init(){
+// ****************************************************************************
+// ****************************************************************************
+// Initialize QEP module
+// ****************************************************************************
+// ****************************************************************************
+	// Setup GPIO for QEP operation
+	GPIO_SetupPinOptions(20, GPIO_INPUT, GPIO_SYNC);
+	GPIO_SetupPinMux(20,0,1);
 
-// ****************************************************
-// Initialize DATALOG module
-// ****************************************************
-	DLOG_4CH_F_init(&dlog_4ch1);
-	dlog_4ch1.input_ptr1 = &DlogCh1;	//data value
-	dlog_4ch1.input_ptr2 = &DlogCh2;
-	dlog_4ch1.input_ptr3 = &DlogCh3;
-	dlog_4ch1.input_ptr4 = &DlogCh4;
-	dlog_4ch1.output_ptr1 = &DBUFF_4CH1[0];
-	dlog_4ch1.output_ptr2 = &DBUFF_4CH2[0];
-	dlog_4ch1.output_ptr3 = &DBUFF_4CH3[0];
-	dlog_4ch1.output_ptr4 = &DBUFF_4CH4[0];
-	dlog_4ch1.size = 150;
-	dlog_4ch1.pre_scalar = 10;
-	dlog_4ch1.trig_value = 0.01;
-	dlog_4ch1.status = 2;
+	GPIO_SetupPinOptions(21, GPIO_INPUT, GPIO_SYNC);
+	GPIO_SetupPinMux(21,0,1);
+
+	GPIO_SetupPinOptions(22, GPIO_INPUT, GPIO_SYNC);
+	GPIO_SetupPinMux(22,0,1);
+
+	GPIO_SetupPinOptions(23, GPIO_INPUT, GPIO_SYNC);
+	GPIO_SetupPinMux(23,0,1);
+
+// ****************************************************************************
+// ****************************************************************************
+// Paramaeter Initialisation
+// ****************************************************************************
+// ****************************************************************************
+
+	// Init QEP parameters
+	qep1.LineEncoder = 1000; // these are the number of slots in the QEP encoder
+	qep1.MechScaler  = _IQ30(0.25/qep1.LineEncoder);
+	qep1.PolePairs   = POLES/2;
+	qep1.CalibratedAngle = 0;
+	QEP_INIT_MACRO(1,qep1)
+	EQep1Regs.QEPCTL.bit.IEI = 0;        // disable POSCNT=POSINIT @ Index
+
+//	// Init RESOLVER parameters
+//	resolver1.StepsPerTurn = RESOLVER_STEPS_PER_TURN;
+//	resolver1.MechScaler   =  1.0;       //_IQ30(1.0/resolver1.StepsPerTurn);
+//	resolver1.PolePairs    = POLES/2;
+
+//	baseParamsInit();                    // initialise all parameters
+//	derivParamsCal();                    // set up derivative loop parameters
+//	init_resolver_Float();
+
+	// Initialize the Speed module for speed calculation from QEP/RESOLVER
+	speed1.K1 = _IQ21(1/(BASE_FREQ*T));
+	speed1.K2 = _IQ(1/(1+T*2*PI*5));      // Low-pass cut-off frequency
+	speed1.K3 = _IQ(1)-speed1.K2;
+	speed1.BaseRpm = 120*(BASE_FREQ/POLES);
+
 
     // Initialize the RAMPGEN module
     rg1.StepAngleMax = _IQ(BASE_FREQ*T);
@@ -1080,4 +1319,237 @@ void param_init(){
 
 	// Set mock REFERENCES for Speed and Iq loops
 	SpeedRef = 0.05;
+
+	//DEVKIT offset:1.65V
+	offset_lemU  = 1.65;
+	offset_lemW  = 1.65;
+	offset_lemV  = 1.65;
+
+//	for (OffsetCalCounter=0; OffsetCalCounter<20000; )
+//	{
+//		if(EPwm11Regs.ETFLG.bit.INT==1)
+//		{
+//			if(OffsetCalCounter>1000)
+//			{
+//				offset_lemU  = K1*offset_lemU + K2*(IFB_LEMU)*ADC_PU_SCALE_FACTOR;
+//				offset_lemV  = K1*offset_lemV + K2*(IFB_LEMV)*ADC_PU_SCALE_FACTOR;
+//				offset_lemW  = K1*offset_lemW + K2*(IFB_LEMW)*ADC_PU_SCALE_FACTOR;
+//			}
+//			EPwm11Regs.ETCLR.bit.INT=1;
+//			OffsetCalCounter++;
+//		}
+//	}
+	// Init FLAGS
+	RunMotor = 0;
+	// ********************************************
+	// Init OFFSET regs with identified values
+	// ********************************************
+	EALLOW;
+	AdcaRegs.ADCPPB1OFFREF = (unsigned int)(offset_lemV/3.0*4096.0);  // setting LEM Iv offset
+	AdcbRegs.ADCPPB1OFFREF = (unsigned int)(offset_lemW/3.0*4096.0);  // setting LEM Iw offset
+	AdccRegs.ADCPPB1OFFREF = (unsigned int)(offset_lemU/3.0*4096.0);
+	EDIS;
+
+// ****************************************************
+// Initialize DATALOG module
+// ****************************************************
+	DLOG_4CH_F_init(&dlog_4ch1);
+	dlog_4ch1.input_ptr1 = &DlogCh1;	//data value
+	dlog_4ch1.input_ptr2 = &DlogCh2;
+	dlog_4ch1.input_ptr3 = &DlogCh3;
+	dlog_4ch1.input_ptr4 = &DlogCh4;
+	dlog_4ch1.output_ptr1 = &DBUFF_4CH1[0];
+	dlog_4ch1.output_ptr2 = &DBUFF_4CH2[0];
+	dlog_4ch1.output_ptr3 = &DBUFF_4CH3[0];
+	dlog_4ch1.output_ptr4 = &DBUFF_4CH4[0];
+	dlog_4ch1.size = 150;
+	dlog_4ch1.pre_scalar = 10;
+	dlog_4ch1.trig_value = 0.01;
+	dlog_4ch1.status = 2;
+
+// ****************************************************
+// Initialize MESSAGEs
+// ****************************************************
+	SETPOINTS_init(&SetPoints);
+	ACTUALVALUE1_init(&ActualValues1);
+	ACTUALVALUE2_init(&ActualValues2);
+}
+
+void HVDMC_Protection(void)
+{
+	EALLOW;
+
+	// Configure GPIO used for Trip Mechanism
+
+	//GPIO input for reading the status of the LEM-overcurrent macro block (active low), GPIO40
+	//could trip PWM based on this, if desired
+	// Configure as Input
+	GpioCtrlRegs.GPBPUD.bit.GPIO40  = 1; // disable pull ups
+	GpioCtrlRegs.GPBMUX1.bit.GPIO40 = 0; // choose GPIO for mux option
+	GpioCtrlRegs.GPBDIR.bit.GPIO40  = 0; // set as input
+	GpioCtrlRegs.GPBINV.bit.GPIO40  = 1;  //invert the input such that '0' is good and '1' is bad after inversion
+
+
+	InputXbarRegs.INPUT1SELECT = 40; //Select GPIO40 as INPUTXBAR1
+
+	//Clearing the Fault(active low), GPIO41,
+	// Configure as Output
+	GpioCtrlRegs.GPBPUD.bit.GPIO41  = 1; // disable pull ups
+	GpioCtrlRegs.GPBMUX1.bit.GPIO41 = 0; // choose GPIO for mux option
+	GpioCtrlRegs.GPBDIR.bit.GPIO41  = 1; // set as output
+	GpioDataRegs.GPBSET.bit.GPIO41  = 1;
+
+	//Forcing IPM Shutdown (Trip) using GPIO58 (Active high)
+	// Configure as Output
+	GpioCtrlRegs.GPBPUD.bit.GPIO58   = 1; // disable pull ups
+	GpioCtrlRegs.GPBMUX2.bit.GPIO58  = 0; // choose GPIO for mux option
+	GpioCtrlRegs.GPBDIR.bit.GPIO58   = 1; // set as output
+	GpioDataRegs.GPBCLEAR.bit.GPIO58 = 1;
+
+	// LEM Current phase V(ADC A2, COMP1) and W(ADC B2, COMP3), High Low Compare event trips
+	cmpssConfig(&Cmpss1Regs, LEM_curHi, LEM_curLo);  //Enable CMPSS1 - LEM V
+	cmpssConfig(&Cmpss3Regs, LEM_curHi, LEM_curLo);  //Enable CMPSS3 - LEM W
+
+	// Shunt Current phase V(ADC A4, COMP2) and W(ADC C2, COMP6), High Low Compare event trips
+//	cmpssConfig(&Cmpss2Regs, SHUNT_curHi, SHUNT_curLo);  //Enable CMPSS2 - Shunt V
+//	cmpssConfig(&Cmpss6Regs, SHUNT_curHi, SHUNT_curLo);  //Enable CMPSS6 - Shunt U
+
+
+	// Configure TRIP 4 to OR the High and Low trips from both comparator 1 & 3
+	// Clear everything first
+	EPwmXbarRegs.TRIP4MUX0TO15CFG.all  = 0x0000;
+	EPwmXbarRegs.TRIP4MUX16TO31CFG.all = 0x0000;
+	// Enable Muxes for ored input of CMPSS1H and 1L, i.e. .1 mux for Mux0
+	EPwmXbarRegs.TRIP4MUX0TO15CFG.bit.MUX0  = 1;  //cmpss1
+	EPwmXbarRegs.TRIP4MUX0TO15CFG.bit.MUX4  = 1;  //cmpss3
+//    EPwmXbarRegs.TRIP4MUX0TO15CFG.bit.MUX2  = 1;  //cmpss2
+//	EPwmXbarRegs.TRIP4MUX0TO15CFG.bit.MUX10 = 1;  //cmpss6
+
+	EPwmXbarRegs.TRIP4MUX0TO15CFG.bit.MUX1 = 1;  //inputxbar1
+
+	// Disable all the muxes first
+	EPwmXbarRegs.TRIP4MUXENABLE.all = 0x0000;
+	// Enable Mux 0  OR Mux 4 to generate TRIP4
+	EPwmXbarRegs.TRIP4MUXENABLE.bit.MUX0  = 1;
+	EPwmXbarRegs.TRIP4MUXENABLE.bit.MUX4  = 1;
+//	EPwmXbarRegs.TRIP4MUXENABLE.bit.MUX2  = 1;
+//	EPwmXbarRegs.TRIP4MUXENABLE.bit.MUX10 = 1;
+	EPwmXbarRegs.TRIP4MUXENABLE.bit.MUX1  = 1;
+
+	EPwm1Regs.DCTRIPSEL.bit.DCAHCOMPSEL = 3; //Trip 4 is the input to the DCAHCOMPSEL
+	EPwm1Regs.TZDCSEL.bit.DCAEVT1       = TZ_DCAH_HI;
+	EPwm1Regs.DCACTL.bit.EVT1SRCSEL     = DC_EVT1;
+	EPwm1Regs.DCACTL.bit.EVT1FRCSYNCSEL = DC_EVT_ASYNC;
+	EPwm1Regs.TZSEL.bit.DCAEVT1         = 1;
+
+	EPwm2Regs.DCTRIPSEL.bit.DCAHCOMPSEL = 3; //Trip 4 is the input to the DCAHCOMPSEL
+	EPwm2Regs.TZDCSEL.bit.DCAEVT1       = TZ_DCAH_HI;
+	EPwm2Regs.DCACTL.bit.EVT1SRCSEL     = DC_EVT1;
+	EPwm2Regs.DCACTL.bit.EVT1FRCSYNCSEL = DC_EVT_ASYNC;
+	EPwm2Regs.TZSEL.bit.DCAEVT1         = 1;
+
+	EPwm3Regs.DCTRIPSEL.bit.DCAHCOMPSEL = 3; //Trip 4 is the input to the DCAHCOMPSEL
+	EPwm3Regs.TZDCSEL.bit.DCAEVT1       = TZ_DCAH_HI;
+	EPwm3Regs.DCACTL.bit.EVT1SRCSEL     = DC_EVT1;
+	EPwm3Regs.DCACTL.bit.EVT1FRCSYNCSEL = DC_EVT_ASYNC;
+	EPwm3Regs.TZSEL.bit.DCAEVT1         = 1;
+
+	EPwm1Regs.TZSEL.bit.CBC6 = 0x1; // Emulator Stop
+	EPwm2Regs.TZSEL.bit.CBC6 = 0x1; // Emulator Stop
+	EPwm3Regs.TZSEL.bit.CBC6 = 0x1; // Emulator Stop
+
+	// What do we want the OST/CBC events to do?
+	// TZA events can force EPWMxA
+	// TZB events can force EPWMxB
+
+	EPwm1Regs.TZCTL.bit.TZA = TZ_FORCE_LO; // EPWMxA will go low
+	EPwm1Regs.TZCTL.bit.TZB = TZ_FORCE_LO; // EPWMxB will go low
+
+	EPwm2Regs.TZCTL.bit.TZA = TZ_FORCE_LO; // EPWMxA will go low
+	EPwm2Regs.TZCTL.bit.TZB = TZ_FORCE_LO; // EPWMxB will go low
+
+	EPwm3Regs.TZCTL.bit.TZA = TZ_FORCE_LO; // EPWMxA will go low
+	EPwm3Regs.TZCTL.bit.TZB = TZ_FORCE_LO; // EPWMxB will go low
+
+	// Clear any spurious OV trip
+	EPwm1Regs.TZCLR.bit.DCAEVT1 = 1;
+	EPwm2Regs.TZCLR.bit.DCAEVT1 = 1;
+	EPwm3Regs.TZCLR.bit.DCAEVT1 = 1;
+
+	EPwm1Regs.TZCLR.bit.OST = 1;
+	EPwm2Regs.TZCLR.bit.OST = 1;
+	EPwm3Regs.TZCLR.bit.OST = 1;
+
+	EDIS;
+
+//************************** End of Prot. Conf. ***************************//
+}
+// ****************************************************************************
+// ****************************************************************************
+//TODO  DMC Protection Against Over Current Protection
+// ****************************************************************************
+// ****************************************************************************
+
+//definitions for selecting DACH reference
+#define REFERENCE_VDDA     0
+
+//definitions for COMPH input selection
+#define NEGIN_DAC          0
+#define NEGIN_PIN          1
+
+//definitions for CTRIPH/CTRIPOUTH output selection
+#define CTRIP_ASYNCH       0
+#define CTRIP_SYNCH        1
+#define CTRIP_FILTER       2
+#define CTRIP_LATCH        3
+
+void cmpssConfig(volatile struct CMPSS_REGS *v, int16 Hi, int16 Lo)
+{
+	//Enable CMPSS
+	v->COMPCTL.bit.COMPDACE = 1;
+	//NEG signal comes from DAC for the low comparator
+	v->COMPCTL.bit.COMPLSOURCE = NEGIN_DAC;
+	//NEG signal comes from DAC for the high comparator
+	v->COMPCTL.bit.COMPHSOURCE = NEGIN_DAC;
+	//Use VDDA as the reference for comparator DACs
+	v->COMPDACCTL.bit.SELREF = REFERENCE_VDDA;
+	//Set DAC to H~75% and L ~25% values
+	v->DACHVALS.bit.DACVAL = Hi;
+	v->DACLVALS.bit.DACVAL = Lo;
+	// comparator oputput is "not" inverted for high compare event
+	v->COMPCTL.bit.COMPHINV = 0;
+	// Comparator output is inverted for for low compare event
+	v->COMPCTL.bit.COMPLINV = 1;
+
+	// Configure Digital Filter
+	//Maximum CLKPRESCALE value provides the most time between samples
+	v->CTRIPHFILCLKCTL.bit.CLKPRESCALE = clkPrescale;  //30;   /* Max count of 1023 */
+	//Maximum SAMPWIN value provides largest number of samples
+	v->CTRIPHFILCTL.bit.SAMPWIN        = sampwin;  //0x1F;
+	//Maximum THRESH value requires static value for entire window
+	//  THRESH should be GREATER than half of SAMPWIN
+	v->CTRIPHFILCTL.bit.THRESH         = thresh;  //0x1F;
+	//Reset filter logic & start filtering
+	v->CTRIPHFILCTL.bit.FILINIT        = 1;
+
+	// Configure CTRIPOUT path
+	//Digital filter output feeds CTRIPH and CTRIPOUTH
+	v->COMPCTL.bit.CTRIPHSEL           = CTRIP_FILTER;
+	v->COMPCTL.bit.CTRIPOUTHSEL        = CTRIP_FILTER;
+
+    // Make sure the asynchronous path compare high and low event
+	// does not go to the OR gate with latched digital filter output
+	v->COMPCTL.bit.ASYNCHEN = 0;
+	v->COMPCTL.bit.ASYNCLEN = 0;
+	//TODO Comparator hysteresis control , set to 2x typical value
+	v->COMPHYSCTL.bit.COMPHYS = 2;
+	// Dac value is updated on sysclock
+	v->COMPDACCTL.bit.SWLOADSEL = 0;
+	// ramp is bypassed
+	v->COMPDACCTL.bit.DACSOURCE = 0;
+	// Clear the latched comparator events
+	v->COMPSTSCLR.bit.HLATCHCLR = 1;
+	v->COMPSTSCLR.bit.LLATCHCLR = 1;
+
+	return;
 }

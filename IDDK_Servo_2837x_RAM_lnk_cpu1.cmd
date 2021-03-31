@@ -76,6 +76,13 @@ SECTIONS
    .bss_cla		    : > RAMLS5,   PAGE = 1
    .const_cla	    : > RAMLS5,   PAGE = 1
 */
+#ifdef __TI_COMPILER_VERSION__
+   #if __TI_COMPILER_VERSION__ >= 15009000
+    .TI.ramfunc : {} > RAMM0,      PAGE = 0
+   #else
+    ramfuncs    : > RAMM0      PAGE = 0
+   #endif
+#endif
    /* The following section definitions are required when using the IPC API Drivers */ 
     GROUP : > CPU1TOCPU2RAM, PAGE = 1 
     {
