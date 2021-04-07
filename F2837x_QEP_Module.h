@@ -68,7 +68,7 @@ Default initializer for the QEP Object.
      (*eQEP[m]).QPOSCTL.all = QPOSCTL_INIT_STATE;												\
      (*eQEP[m]).QUPRD = 600000;		        	/* Unit Timer for 100Hz*/						\
      (*eQEP[m]).QCAPCTL.all = QCAPCTL_INIT_STATE;												\
-     (*eQEP[m]).QPOSMAX = 4*v.LineEncoder;														\
+     (*eQEP[m]).QPOSMAX = 4*v.LineEncoder-1;														\
 																								
 
 #define QEP_MACRO(m,v)																		\

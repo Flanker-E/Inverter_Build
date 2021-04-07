@@ -55,7 +55,7 @@ Following is the list of the Build Level choices.
 /*------------------------------------------------------------------------------
 This line sets the BUILDLEVEL to one of the available choices.
 ------------------------------------------------------------------------------*/
-#define   BUILDLEVEL LEVEL2
+#define   BUILDLEVEL LEVEL3
 
 // Select Position Feedback Option
 #define QEP_POS_ENCODER 1
@@ -141,6 +141,8 @@ Current sensors scaling
 //       SDFM,  0.8906pu current  == 12.5A
 // ************************************************************************
 #define  LEM_TO_SHUNT    12.5//100/8 DEVKIT //1.206637   // (12.0/9.945)
+#define BASE_SHUNT_CURRENT    9.95    // Base peak phase current (amp), Max. measurable peak curr.
+#define BASE_LEM_CURRENT     12.0     //  ----- do -----
 /*------------------------------------------------------------------------------
 Current sensors scaling
 ------------------------------------------------------------------------------*/
@@ -175,7 +177,7 @@ Uint16  clkPrescale = 20,
 // ****************************************************************************
 float32 T = 0.001/ISR_FREQUENCY;    // Samping period (sec), see parameter.h
 _iq VdTesting = _IQ(0.0),			// Vd reference (pu)
-    VqTesting = _IQ(0.07),			// Vq reference (pu)
+    VqTesting = _IQ(0.8),			// Vq reference (pu)
     IdRef     = _IQ(0.0),			// Id reference (pu)
     IqRef     = _IQ(0.0),			// Iq reference (pu)
     SpeedRef  = _IQ(0.0);           // For Closed Loop tests
@@ -255,6 +257,11 @@ extern void derivParamsCal(void);
 // Variables for Position Sensor Suite
 _iq posEncElecTheta[6],
     posEncMechTheta[6];
+
+_iq  cntr=0,
+	 alignCnt = 20000;
+_iq  IdRef_start = _IQ(0.1),
+	 IdRef_run   = _IQ(0.0);
 
 // Used to indirectly access eQEP module
 volatile struct EQEP_REGS *eQEP[] =

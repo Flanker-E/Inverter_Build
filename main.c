@@ -53,6 +53,7 @@ void enDat_init();
 void param_init();
 
 void mc34_init();
+_iq ramper(_iq in, _iq out, _iq rampDelta);
 /* Interrupt functions */
 //#pragma INTERRUPT (ResolverISR, HPI)
 #pragma INTERRUPT (FOC_Fast_ISR, LPI)
@@ -153,9 +154,6 @@ void main(void)
     // GPIO&Understand PWM initializing
     epwm_init();
 
-
-    //TODO can be replaced by Epwm CTU initializing
-//    ctu0_init();
 
     //TODO understand&GPIO ADC DAC initializing
 //    InitGpio();
@@ -282,25 +280,11 @@ interrupt void FOC_Fast_ISR(void){
 
 	// Verifying the ISR
     IsrTicker++;
+    if(IsrTicker==20) RunMotor=1;
 
 
-// =============================== LEVEL 1 ======================================
-//	  Checks target independent modules, duty cycle waveforms and PWM update
-//	  Keep the motors disconnected at this level
-// ==============================================================================
-// =============================== LEVEL 2 ======================================
-//	  Level 2 verifies
-//	     - all current sense schems
-//         - analog-to-digital conversion (shunt and LEM)
-//         - SDFM function
-//       - Current Limit Settings for over current protection
-//       - clarke/park transformations (CLARKE/PARK)
-//       - Position sensor interface
-//         - speed estimation
-// ==============================================================================
-
-//TODO BUILD 2
-#if (BUILDLEVEL == LEVEL2)
+//TODO BUILD 3
+#if (BUILDLEVEL == LEVEL3)
 	// ------------------------------------------------------------------------------
 	// Alignment Routine: this routine aligns the motor to zero electrical angle
 	// and in case of QEP also finds the index location and initializes the angle
@@ -310,21 +294,47 @@ interrupt void FOC_Fast_ISR(void){
 		lsw = 0;
 	else if (lsw == 0)
 	{
+		// alignment current
+		IdRef = IdRef_start;  //IQ(0.1);
 		// for restarting from (RunMotor = 0)
 		rc1.TargetValue =  rc1.SetpointValue = 0;
-
+		// set up an alignment and hold time for shaft to settle down
+		if (pi_id.Ref >= IdRef)
+		{
+			if (cntr < alignCnt)
+				cntr++;
+			else
+			{
 #if POSITION_ENCODER==QEP_POS_ENCODER
-		lsw = 1;   // for QEP, spin the motor to find the index pulse
+				lsw = 1;      // for QEP, spin the motor to find the index pulse
+				IqRef = _IQ(0.2);
+#else
+				lsw = 2;   // for absolute encoders no need for lsw=1
+#endif
+				cntr  = 0;
+				IdRef = IdRef_run;
+			}
+		}
+	} // end else if (lsw=0)
+//	if(!RunMotor)
+//		lsw = 0;
+//	else if (lsw == 0)
+//	{
+//		// for restarting from (RunMotor = 0)
+//		rc1.TargetValue =  rc1.SetpointValue = 0;
+//
+//#if POSITION_ENCODER==QEP_POS_ENCODER
+//		lsw = 1;   // for QEP, spin the motor to find the index pulse
 //#else
 //		lsw  = 2;  // for absolute encoders no need for lsw=1
-
-#endif
-	} // end else if (lsw=0)
+//#endif
+//	} // end else if (lsw=0)
 
 // ------------------------------------------------------------------------------
 //  Connect inputs of the RMP module and call the ramp control macro
 // ------------------------------------------------------------------------------
-    rc1.TargetValue = SpeedRef;
+	if(lsw==0)rc1.TargetValue = 0;
+	else rc1.TargetValue = SpeedRef;
 	RC_MACRO(rc1)
 
 // ------------------------------------------------------------------------------
@@ -349,32 +359,7 @@ interrupt void FOC_Fast_ISR(void){
 	clarke1.As = current_sensor.As; // Phase A curr.
 	clarke1.Bs = current_sensor.Bs; // Phase B curr.
 	CLARKE_MACRO(clarke1)
-// ------------------------------------------------------------------------------
-//  Connect inputs of the PARK module and call the park trans. macro
-// ------------------------------------------------------------------------------
-	park1.Alpha  = clarke1.Alpha;
-	park1.Beta   = clarke1.Beta;
-	park1.Angle  = rg1.Out;
-	park1.Sine   = __sinpuf32(park1.Angle);
-	park1.Cosine = __cospuf32(park1.Angle);
-	PARK_MACRO(park1)
-
-// ------------------------------------------------------------------------------
-//  Connect inputs of the INV_PARK module and call the inverse park trans. macro
-//	There are two option for trigonometric functions:
-//  IQ sin/cos look-up table provides 512 discrete sin and cos points in Q30 format
-//  IQsin/cos PU functions interpolate the data in the lookup table yielding higher resolution.
-// ------------------------------------------------------------------------------
-    ipark1.Ds = VdTesting;
-    ipark1.Qs = VqTesting;
-
-//    park1.Angle  = rg1.Out;
-//	park1.Sine   = __sinpuf32(park1.Angle);
-//	park1.Cosine = __cospuf32(park1.Angle);
-
-	ipark1.Sine=park1.Sine;
-    ipark1.Cosine=park1.Cosine;
-	IPARK_MACRO(ipark1)
+//	CLARKE1_MACRO(clarke1)
 
 // ------------------------------------------------------------------------------
 //   Position encoder suite module
@@ -427,6 +412,55 @@ interrupt void FOC_Fast_ISR(void){
 	SPEED_FR_MACRO(speed1)
 
 // ------------------------------------------------------------------------------
+//  Connect inputs of the PARK module and call the park trans. macro
+// ------------------------------------------------------------------------------
+	park1.Alpha  = clarke1.Alpha;
+	park1.Beta   = clarke1.Beta;
+	if(lsw==0) park1.Angle = 0;
+	else
+//		park1.Angle  = rg1.Out;
+		park1.Angle  = posEncElecTheta[POSITION_ENCODER];
+
+	park1.Sine   = __sinpuf32(park1.Angle);
+	park1.Cosine = __cospuf32(park1.Angle);
+	PARK_MACRO(park1)
+
+// ------------------------------------------------------------------------------
+//  Connect inputs of the PID_REG3 module and call the PID IQ controller macro
+//// ------------------------------------------------------------------------------
+//	if(lsw==0) 	pi_iq.Ref = 0;
+//	else		pi_iq.Ref= IqRef;
+	pi_iq.Ref =  IqRef * (lsw==0 ? 0 : 1);
+	pi_iq.Fbk = park1.Qs;
+	PI_MACRO(pi_iq)
+
+// ------------------------------------------------------------------------------
+//  Connect inputs of the PI module and call the PID ID controller macro
+// ------------------------------------------------------------------------------
+//	if(lsw==0)	pi_id.Ref = IdRef;
+//	else		pi_id.Ref = IdRef;
+	pi_id.Ref = ramper(IdRef, pi_id.Ref, _IQ(0.0001)); //avoid steep error
+	pi_id.Fbk = park1.Ds;
+	PI_MACRO(pi_id)
+
+// ------------------------------------------------------------------------------
+//  Connect inputs of the INV_PARK module and call the inverse park trans. macro
+//	There are two option for trigonometric functions:
+//  IQ sin/cos look-up table provides 512 discrete sin and cos points in Q30 format
+//  IQsin/cos PU functions interpolate the data in the lookup table yielding higher resolution.
+// ------------------------------------------------------------------------------
+//    ipark1.Ds = VdTesting;
+//    ipark1.Qs = VqTesting;
+	ipark1.Ds = pi_id.Out;
+	ipark1.Qs = pi_iq.Out;
+
+	ipark1.Sine=park1.Sine;
+    ipark1.Cosine=park1.Cosine;
+	IPARK_MACRO(ipark1)
+
+
+
+// ------------------------------------------------------------------------------
 //  Connect inputs of the SVGEN_DQ module and call the space-vector gen. macro
 // ------------------------------------------------------------------------------
   	svgen1.Ualpha = ipark1.Alpha;
@@ -436,9 +470,9 @@ interrupt void FOC_Fast_ISR(void){
 // ------------------------------------------------------------------------------
 //  Computed Duty and Write to CMPA register
 // ------------------------------------------------------------------------------
- 	EPwm1Regs.CMPA.bit.CMPA = (INV_PWM_HALF_TBPRD*svgen1.Tc*10)+INV_PWM_HALF_TBPRD;
-	EPwm2Regs.CMPA.bit.CMPA = (INV_PWM_HALF_TBPRD*svgen1.Ta*10)+INV_PWM_HALF_TBPRD;
-	EPwm3Regs.CMPA.bit.CMPA = (INV_PWM_HALF_TBPRD*svgen1.Tb*10)+INV_PWM_HALF_TBPRD;
+ 	EPwm1Regs.CMPA.bit.CMPA = (INV_PWM_HALF_TBPRD*svgen1.Tb)+INV_PWM_HALF_TBPRD;
+	EPwm2Regs.CMPA.bit.CMPA = (INV_PWM_HALF_TBPRD*svgen1.Tc)+INV_PWM_HALF_TBPRD;
+	EPwm3Regs.CMPA.bit.CMPA = (INV_PWM_HALF_TBPRD*svgen1.Ta)+INV_PWM_HALF_TBPRD;
 
 // ------------------------------------------------------------------------------
 //  Connect inputs of the DATALOG module
@@ -447,8 +481,8 @@ interrupt void FOC_Fast_ISR(void){
 	DlogCh2 = svgen1.Ta;
 //	DlogCh3 = svgen1.Tb;
 //	DlogCh4 = svgen1.Tc;
-	DlogCh3 = clarke1.Alpha;
-	DlogCh4 = clarke1.Beta;
+	DlogCh3 = park1.Ds;
+	DlogCh4 = park1.Qs;
 
 //------------------------------------------------------------------------------
 // Variable display on DACs B and C
@@ -460,16 +494,15 @@ interrupt void FOC_Fast_ISR(void){
 //	}
 //	else
 //	{
-//	if(test<4096)
-//		test++;
-//	else
-//		test=0;
 //	DacbRegs.DACVALS.bit.DACVALS = (svgen1.Tb*0.5+0.5)*4096;
 //	DacaRegs.DACVALS.bit.DACVALS = (svgen1.Tc*0.5+0.5)*4096;
 //	DacbRegs.DACVALS.bit.DACVALS = (unsigned int)((clarke1.Alpha+4.0)*512.0);
 //	DacaRegs.DACVALS.bit.DACVALS = (unsigned int)((clarke1.Beta+4.0)*512.0);
 	DacbRegs.DACVALS.bit.DACVALS = rg1.Out*4096;
 	DacaRegs.DACVALS.bit.DACVALS = posEncElecTheta[POSITION_ENCODER]*4096;
+//	DacaRegs.DACVALS.bit.DACVALS = (unsigned int)((2048*svgen1.Tc)+2048);
+//	DacbRegs.DACVALS.bit.DACVALS = (unsigned int)((2048*svgen1.Ta)+2048);
+
 //	}
 
 #endif // (BUILDLEVEL==LEVEL2)
@@ -729,14 +762,7 @@ void InitLED()
 	GPIO_SetupPinOptions(106, GPIO_OUTPUT, GPIO_PUSHPULL);
 	GPIO_SetupPinMux(106, GPIO_MUX_CPU1, 0);
 #endif
-//	GPIO_SetupPinOptions(34, GPIO_OUTPUT, GPIO_ASYNC);
-//	GPIO_SetupPinMux(34,0,0);
-//
-//	GPIO_SetupPinOptions(31, GPIO_OUTPUT, GPIO_ASYNC);
-//	GPIO_SetupPinMux(31,0,0);
-//
-//	GPIO_SetupPinOptions(43, GPIO_OUTPUT, GPIO_ASYNC);
-//	GPIO_SetupPinMux(43,0,0);
+
 }
 void CAN_A_init()
 {
@@ -1253,127 +1279,13 @@ void uart_init()
     UARTEnable(UARTA_BASE);
 
 }
-void param_init(){
+
+//TODO
 // ****************************************************************************
 // ****************************************************************************
-// Initialize QEP module
+// DMC Protection Against Over Current Protection
 // ****************************************************************************
 // ****************************************************************************
-	// Setup GPIO for QEP operation
-	GPIO_SetupPinOptions(20, GPIO_INPUT, GPIO_SYNC);
-	GPIO_SetupPinMux(20,0,1);
-
-	GPIO_SetupPinOptions(21, GPIO_INPUT, GPIO_SYNC);
-	GPIO_SetupPinMux(21,0,1);
-
-	GPIO_SetupPinOptions(22, GPIO_INPUT, GPIO_SYNC);
-	GPIO_SetupPinMux(22,0,1);
-
-	GPIO_SetupPinOptions(23, GPIO_INPUT, GPIO_SYNC);
-	GPIO_SetupPinMux(23,0,1);
-
-// ****************************************************************************
-// ****************************************************************************
-// Paramaeter Initialisation
-// ****************************************************************************
-// ****************************************************************************
-
-	// Init QEP parameters
-	qep1.LineEncoder = 1000; // these are the number of slots in the QEP encoder
-	qep1.MechScaler  = _IQ30(0.25/qep1.LineEncoder);
-	qep1.PolePairs   = POLES/2;
-	qep1.CalibratedAngle = 0;
-	QEP_INIT_MACRO(1,qep1)
-	EQep1Regs.QEPCTL.bit.IEI = 0;        // disable POSCNT=POSINIT @ Index
-
-//	// Init RESOLVER parameters
-//	resolver1.StepsPerTurn = RESOLVER_STEPS_PER_TURN;
-//	resolver1.MechScaler   =  1.0;       //_IQ30(1.0/resolver1.StepsPerTurn);
-//	resolver1.PolePairs    = POLES/2;
-
-//	baseParamsInit();                    // initialise all parameters
-//	derivParamsCal();                    // set up derivative loop parameters
-//	init_resolver_Float();
-
-	// Initialize the Speed module for speed calculation from QEP/RESOLVER
-	speed1.K1 = _IQ21(1/(BASE_FREQ*T));
-	speed1.K2 = _IQ(1/(1+T*2*PI*5));      // Low-pass cut-off frequency
-	speed1.K3 = _IQ(1)-speed1.K2;
-	speed1.BaseRpm = 120*(BASE_FREQ/POLES);
-
-
-    // Initialize the RAMPGEN module
-    rg1.StepAngleMax = _IQ(BASE_FREQ*T);
-
-	// Init PI module for ID loop
-	pi_id.Kp   = _IQ(1.0);//_IQ(3.0);
-	pi_id.Ki   = _IQ(T/0.04);//0.0075);
-	pi_id.Umax = _IQ(0.5);
-	pi_id.Umin = _IQ(-0.5);
-
-	// Init PI module for IQ loop
-	pi_iq.Kp   = _IQ(1.0);//_IQ(4.0);
-	pi_iq.Ki   = _IQ(T/0.04);//_IQ(0.015);
-	pi_iq.Umax = _IQ(0.8);
-	pi_iq.Umin = _IQ(-0.8);
-
-	// Set mock REFERENCES for Speed and Iq loops
-	SpeedRef = 0.05;
-
-	//DEVKIT offset:1.65V
-	offset_lemU  = 1.65;
-	offset_lemW  = 1.65;
-	offset_lemV  = 1.65;
-
-//	for (OffsetCalCounter=0; OffsetCalCounter<20000; )
-//	{
-//		if(EPwm11Regs.ETFLG.bit.INT==1)
-//		{
-//			if(OffsetCalCounter>1000)
-//			{
-//				offset_lemU  = K1*offset_lemU + K2*(IFB_LEMU)*ADC_PU_SCALE_FACTOR;
-//				offset_lemV  = K1*offset_lemV + K2*(IFB_LEMV)*ADC_PU_SCALE_FACTOR;
-//				offset_lemW  = K1*offset_lemW + K2*(IFB_LEMW)*ADC_PU_SCALE_FACTOR;
-//			}
-//			EPwm11Regs.ETCLR.bit.INT=1;
-//			OffsetCalCounter++;
-//		}
-//	}
-	// Init FLAGS
-	RunMotor = 0;
-	// ********************************************
-	// Init OFFSET regs with identified values
-	// ********************************************
-	EALLOW;
-	AdcaRegs.ADCPPB1OFFREF = (unsigned int)(offset_lemV/3.0*4096.0);  // setting LEM Iv offset
-	AdcbRegs.ADCPPB1OFFREF = (unsigned int)(offset_lemW/3.0*4096.0);  // setting LEM Iw offset
-	AdccRegs.ADCPPB1OFFREF = (unsigned int)(offset_lemU/3.0*4096.0);
-	EDIS;
-
-// ****************************************************
-// Initialize DATALOG module
-// ****************************************************
-	DLOG_4CH_F_init(&dlog_4ch1);
-	dlog_4ch1.input_ptr1 = &DlogCh1;	//data value
-	dlog_4ch1.input_ptr2 = &DlogCh2;
-	dlog_4ch1.input_ptr3 = &DlogCh3;
-	dlog_4ch1.input_ptr4 = &DlogCh4;
-	dlog_4ch1.output_ptr1 = &DBUFF_4CH1[0];
-	dlog_4ch1.output_ptr2 = &DBUFF_4CH2[0];
-	dlog_4ch1.output_ptr3 = &DBUFF_4CH3[0];
-	dlog_4ch1.output_ptr4 = &DBUFF_4CH4[0];
-	dlog_4ch1.size = 150;
-	dlog_4ch1.pre_scalar = 10;
-	dlog_4ch1.trig_value = 0.01;
-	dlog_4ch1.status = 2;
-
-// ****************************************************
-// Initialize MESSAGEs
-// ****************************************************
-	SETPOINTS_init(&SetPoints);
-	ACTUALVALUE1_init(&ActualValues1);
-	ACTUALVALUE2_init(&ActualValues2);
-}
 
 void HVDMC_Protection(void)
 {
@@ -1484,11 +1396,7 @@ void HVDMC_Protection(void)
 
 //************************** End of Prot. Conf. ***************************//
 }
-// ****************************************************************************
-// ****************************************************************************
-//TODO  DMC Protection Against Over Current Protection
-// ****************************************************************************
-// ****************************************************************************
+
 
 //definitions for selecting DACH reference
 #define REFERENCE_VDDA     0
@@ -1552,4 +1460,150 @@ void cmpssConfig(volatile struct CMPSS_REGS *v, int16 Hi, int16 Lo)
 	v->COMPSTSCLR.bit.LLATCHCLR = 1;
 
 	return;
+}
+// ****************************************************************************
+// ****************************************************************************
+// POSITION LOOP UTILITY FUNCTIONS
+// ****************************************************************************
+// ****************************************************************************
+
+// slew programmable ramper
+_iq ramper(_iq in, _iq out, _iq rampDelta) {
+	_iq err;
+
+	err = in - out;
+	if (err > rampDelta)
+		return(out + rampDelta);
+  	else if (err < -rampDelta)
+  		return(out - rampDelta);
+    else
+    	return(in);
+}
+
+void param_init(){
+// ****************************************************************************
+// ****************************************************************************
+// Initialize QEP module
+// ****************************************************************************
+// ****************************************************************************
+	// Setup GPIO for QEP operation
+	GPIO_SetupPinOptions(20, GPIO_INPUT, GPIO_SYNC);
+	GPIO_SetupPinMux(20,0,1);
+
+	GPIO_SetupPinOptions(21, GPIO_INPUT, GPIO_SYNC);
+	GPIO_SetupPinMux(21,0,1);
+
+	GPIO_SetupPinOptions(22, GPIO_INPUT, GPIO_SYNC);
+	GPIO_SetupPinMux(22,0,1);
+
+	GPIO_SetupPinOptions(99, GPIO_INPUT, GPIO_SYNC);
+	GPIO_SetupPinMux(99,0,5);
+//	InitEQep1Gpio();
+
+// ****************************************************************************
+// ****************************************************************************
+// Paramaeter Initialisation
+// ****************************************************************************
+// ****************************************************************************
+
+	// Init QEP parameters
+	qep1.LineEncoder = 1000; // these are the number of slots in the QEP encoder
+	qep1.MechScaler  = _IQ30(0.25/qep1.LineEncoder);
+	qep1.PolePairs   = POLES/2;
+	qep1.CalibratedAngle = 0;
+	QEP_INIT_MACRO(1,qep1)
+	EQep1Regs.QEPCTL.bit.IEI = 0;        // disable POSCNT=POSINIT @ Index
+
+//	// Init RESOLVER parameters
+//	resolver1.StepsPerTurn = RESOLVER_STEPS_PER_TURN;
+//	resolver1.MechScaler   =  1.0;       //_IQ30(1.0/resolver1.StepsPerTurn);
+//	resolver1.PolePairs    = POLES/2;
+
+//	baseParamsInit();                    // initialise all parameters
+//	derivParamsCal();                    // set up derivative loop parameters
+//	init_resolver_Float();
+
+	// Initialize the Speed module for speed calculation from QEP/RESOLVER
+	speed1.K1 = _IQ21(1/(BASE_FREQ*T));
+	speed1.K2 = _IQ(1/(1+T*2*PI*5));      // Low-pass cut-off frequency
+	speed1.K3 = _IQ(1)-speed1.K2;
+	speed1.BaseRpm = 120*(BASE_FREQ/POLES);
+
+
+    // Initialize the RAMPGEN module
+    rg1.StepAngleMax = _IQ(BASE_FREQ*T);
+
+	// Init PI module for ID loop
+	pi_id.Kp   = _IQ(1.0);//_IQ(3.0);
+	pi_id.Ki   = _IQ(T/0.04);//0.0075);
+	pi_id.Umax = _IQ(0.5);
+	pi_id.Umin = _IQ(-0.5);
+
+	// Init PI module for IQ loop
+	pi_iq.Kp   = _IQ(1.0);//_IQ(4.0);
+	pi_iq.Ki   = _IQ(T/0.04);//_IQ(0.015);
+	pi_iq.Umax = _IQ(0.9);
+	pi_iq.Umin = _IQ(-0.9);
+
+	// Set mock REFERENCES for Speed and Iq loops
+	SpeedRef = 0.1;
+
+	//DEVKIT offset:1.65V
+	offset_lemU  = 1.65;
+	offset_lemW  = 1.65;
+	offset_lemV  = 1.65;
+
+	for (OffsetCalCounter=0; OffsetCalCounter<20000; )
+	{
+		if(EPwm11Regs.ETFLG.bit.INT==1)
+		{
+			if(OffsetCalCounter>1000)
+			{
+				offset_lemU  = K1*offset_lemU + K2*(IFB_LEMU)*ADC_PU_SCALE_FACTOR*3;
+				offset_lemV  = K1*offset_lemV + K2*(IFB_LEMV)*ADC_PU_SCALE_FACTOR*3;
+				offset_lemW  = K1*offset_lemW + K2*(IFB_LEMW)*ADC_PU_SCALE_FACTOR*3;
+			}
+			EPwm11Regs.ETCLR.bit.INT=1;
+			OffsetCalCounter++;
+		}
+	}
+	// Init FLAGS
+	RunMotor = 0;
+#if BUILDLEVEL == LEVEL3
+	IqRef    = 0.0;
+#else
+	IqRef = _IQ(0.05);
+#endif
+	// ********************************************
+	// Init OFFSET regs with identified values
+	// ********************************************
+	EALLOW;
+	AdcaRegs.ADCPPB1OFFREF = (unsigned int)(offset_lemV/3.0*4096.0);  // setting LEM Iv offset
+	AdcbRegs.ADCPPB1OFFREF = (unsigned int)(offset_lemW/3.0*4096.0);  // setting LEM Iw offset
+	AdccRegs.ADCPPB1OFFREF = (unsigned int)(offset_lemU/3.0*4096.0);
+	EDIS;
+
+// ****************************************************
+// Initialize DATALOG module
+// ****************************************************
+	DLOG_4CH_F_init(&dlog_4ch1);
+	dlog_4ch1.input_ptr1 = &DlogCh1;	//data value
+	dlog_4ch1.input_ptr2 = &DlogCh2;
+	dlog_4ch1.input_ptr3 = &DlogCh3;
+	dlog_4ch1.input_ptr4 = &DlogCh4;
+	dlog_4ch1.output_ptr1 = &DBUFF_4CH1[0];
+	dlog_4ch1.output_ptr2 = &DBUFF_4CH2[0];
+	dlog_4ch1.output_ptr3 = &DBUFF_4CH3[0];
+	dlog_4ch1.output_ptr4 = &DBUFF_4CH4[0];
+	dlog_4ch1.size = 150;
+	dlog_4ch1.pre_scalar = 10;
+	dlog_4ch1.trig_value = 0.01;
+	dlog_4ch1.status = 2;
+
+// ****************************************************
+// Initialize MESSAGEs
+// ****************************************************
+	SETPOINTS_init(&SetPoints);
+	ACTUALVALUE1_init(&ActualValues1);
+	ACTUALVALUE2_init(&ActualValues2);
 }
