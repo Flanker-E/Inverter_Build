@@ -26,6 +26,11 @@
 	</natures>
 	<linkedResources>
 		<link>
+			<name>F28379D_xds100.ccxml</name>
+			<type>1</type>
+			<location>C:/Users/Flanker/ti/CCSTargetConfigurations/F28379D_xds100.ccxml</location>
+		</link>
+		<link>
 			<name>F2837xD_CodeStartBranch.asm</name>
 			<type>1</type>
 			<locationURI>INSTALLROOT_F2837XD/F2837xD_common/source/F2837xD_CodeStartBranch.asm</locationURI>

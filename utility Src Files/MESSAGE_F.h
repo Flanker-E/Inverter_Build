@@ -67,7 +67,7 @@ typedef struct{
 void SETPOINTS_init(SETPOINTS *v);
 void ACTUALVALUE1_init(ACTUALVALUES1 *v);
 void ACTUALVALUE2_init(ACTUALVALUES2 *v);
-void ACTUALVALUE1_uart_TX(ACTUALVALUES1 *v,uint32_t UART_BASE);
+void ACTUALVALUE_uart_TX(unsigned char *av,uint32_t UART_BASE, unsigned char address);
 void ACTUALVALUE2_uart_TX(ACTUALVALUES2 *v,uint32_t UART_BASE);
 void ACTUALVALUE1_can_TX(ACTUALVALUES1 *v);
 void ACTUALVALUE2_can_TX(ACTUALVALUES2 *v);

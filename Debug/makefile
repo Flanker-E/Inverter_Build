@@ -34,10 +34,10 @@ ORDERED_OBJS += \
 "./uart.obj" \
 "./utility Src Files/DLOG_4CH_F.obj" \
 "./utility Src Files/MESSAGE_F.obj" \
+"../IDDK_Servo_2837x_RAM_lnk_cpu1.cmd" \
 "../Float/lib/PM_endat22_lib.lib" \
 $(GEN_CMDS__FLAG) \
 -llibc.a \
--l"C:/Users/Flanker/Documents/CCS_10_1/Inverter_Build/IDDK_Servo_2837x_RAM_lnk_cpu1.cmd" \
 -l"C:/ti/controlSUITE/libs/dsp/VCU/v2_10_00_00/lib/c28x_vcu0_library_fpu32.lib" \
 -l"C:/ti/ccs1011/ccs/tools/compiler/ti-cgt-c2000_20.2.1.LTS/lib/rts2800_fpu32.lib" \
 -l"C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_headers/cmd/F2837xD_Headers_nonBIOS_cpu1.cmd" \
@@ -171,7 +171,7 @@ all: $(OBJS) $(CMD_SRCS) $(LIB_SRCS) $(GEN_CMDS)
 Inverter_Build.out: $(OBJS) $(CMD_SRCS) $(LIB_SRCS) $(GEN_CMDS)
 	@echo 'Building target: "$@"'
 	@echo 'Invoking: C2000 Linker'
-	"C:/ti/ccs1011/ccs/tools/compiler/ti-cgt-c2000_20.2.1.LTS/bin/cl2000" -v28 -ml -mt --cla_support=cla1 --float_support=fpu32 --tmu_support=tmu0 --vcu_support=vcu2 --advice:performance=all --define=CPU1 --define=_LAUNCHXL_F28379D -g --printf_support=minimal --diag_warning=225 --diag_wrap=off --display_error_number --abi=coffabi -z -m"Inverter_Build.map" --stack_size=0x380 --warn_sections -i"C:/ti/ccs1011/ccs/tools/compiler/ti-cgt-c2000_20.2.1.LTS/lib" -i"C:/ti/controlSUITE/libs/dsp/VCU/v2_10_00_00/lib" -i"C:/ti/ccs1011/ccs/tools/compiler/ti-cgt-c2000_20.2.1.LTS/include" -i"C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/cmd" -i"C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_headers/cmd" --reread_libs --diag_wrap=off --display_error_number --xml_link_info="Inverter_Build_linkInfo.xml" --entry_point=_c_int00 --rom_model -o "Inverter_Build.out" $(ORDERED_OBJS)
+	"C:/ti/ccs1011/ccs/tools/compiler/ti-cgt-c2000_20.2.1.LTS/bin/cl2000" -v28 -ml -mt --cla_support=cla1 --float_support=fpu32 --tmu_support=tmu0 --vcu_support=vcu2 --advice:performance=all --define=CPU1 --define=_LAUNCHXL_F28379D -g --printf_support=minimal --diag_warning=225 --diag_wrap=off --display_error_number --abi=coffabi -z -m"Inverter_Build.map" --stack_size=0x400 --warn_sections -i"C:/ti/ccs1011/ccs/tools/compiler/ti-cgt-c2000_20.2.1.LTS/lib" -i"C:/ti/controlSUITE/libs/dsp/VCU/v2_10_00_00/lib" -i"C:/ti/ccs1011/ccs/tools/compiler/ti-cgt-c2000_20.2.1.LTS/include" -i"C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_common/cmd" -i"C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_headers/cmd" --reread_libs --diag_wrap=off --display_error_number --xml_link_info="Inverter_Build_linkInfo.xml" --entry_point=_c_int00 --rom_model -o "Inverter_Build.out" $(ORDERED_OBJS)
 	@echo 'Finished building target: "$@"'
 	@echo ' '
 

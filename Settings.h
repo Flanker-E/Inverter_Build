@@ -64,7 +64,7 @@ This line sets the BUILDLEVEL to one of the available choices.
 #define LAUNCHPAD 0
 #define PYMBOARD 1
 #define   BUILDTYPE LAUNCHPAD
-// #define   BUILDTYPE PYMBOARD
+//#define   BUILDTYPE PYMBOARD
 
 #define FL 0
 #define FR 1
@@ -140,7 +140,12 @@ Current sensors scaling
 //       LEM,   1.0pu current  == 12A
 //       SDFM,  0.8906pu current  == 12.5A
 // ************************************************************************
-#define  LEM_TO_SHUNT    12.5//100/8 DEVKIT //1.206637   // (12.0/9.945)
+#if (BUILDTYPE==LAUNCHPAD)
+float  current_gain[3] = {12.5,12.5,12.5};//100/8 DEVKIT //1.206637   // (12.0/9.945)
+#elif (BUILDTYPE==PYMBOARD)
+float  current_gain[3] = {264.9,268.9,265.8};
+#endif
+
 #define BASE_SHUNT_CURRENT    9.95    // Base peak phase current (amp), Max. measurable peak curr.
 #define BASE_LEM_CURRENT     12.0     //  ----- do -----
 /*------------------------------------------------------------------------------
@@ -283,5 +288,16 @@ SPEED_MEAS_QEP speed1 = SPEED_MEAS_QEP_DEFAULTS;
 #define LR   			  				// Rotor inductance (H)
 #define LM   			   				// Magnatizing inductance (H)
 #define POLES  	8						// Number of poles
+
+#if (BUILDTYPE==LAUNCHPAD)
+#define CAN_BASE CANB_BASE
+#elif (BUILDTYPE==PYMBOARD)
+#define CAN_BASE CANA_BASE
+#endif
+
+#define MSG_DATA_LENGTH    8
+#define TX_MSG1_OBJ_ID    1
+#define TX_MSG2_OBJ_ID    2
+#define RX_MSG_OBJ_ID    3
 
 #endif /* SETTINGS_H_ */

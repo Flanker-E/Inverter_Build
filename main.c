@@ -24,7 +24,12 @@
 #define CAN_TX_COUNTER					50   // fast ISR 100us, 50*100 us=5ms
 #define CAN_OFFLINE_COUNTER				500   // fast ISR 100us, 500*100 us=50ms
 
-#define BLINKY_LED_GPIO    31
+#if (BUILDTYPE==LAUNCHPAD)
+#define STATE_LED_GPIO    31
+#elif (BUILDTYPE==PYMBOARD)
+#define STATE_LED_GPIO    106
+#endif
+
 #define DELAY (CPU_RATE/1000*6*510)  //Qual period at 6 samples
 
 /******************************************************************************
@@ -35,7 +40,7 @@ static bool focCurrentLoop(pmsmFOC_t *ptr);
 static bool faultDetect(pmsmFOC_t *ptr);
 
 void InitLED();
-void CAN_A_init();
+void CAN_init();
 void epwm_init();
 void InitEPwm1ch_UpDwnCnt_CNF(int16 n, Uint16 period, int16 db);
 void InitEPWM_1ch_UpCnt_CNF(int16 n, Uint16 period);
@@ -75,8 +80,17 @@ static volatile bool canOfflineDetectOn	= false;    // flag for CAN offline dete
 static unsigned char count_state=0;
 int16 OffsetCalCounter;
 
-unsigned char ucTXMsgData[4] = {1,2,3,4};
-unsigned char ucRXMsgData[4];
+tCANMsgObject sTXCAN_AV1;
+tCANMsgObject sTXCAN_AV2;
+tCANMsgObject sRXCAN_SP;
+volatile uint32_t txMsgCount = 0;
+volatile uint32_t rxMsgCount = 0;
+volatile uint32_t errorFlag = 0;
+unsigned char txMsgData1[8]={0,0,0,0,0,1,2,3};
+unsigned char txMsgData2[8]={1,2,3,0,0,0,0,0};
+unsigned char rxMsgData[8]={0,0,0,0,0,0,0,0};
+//unsigned char ucTXMsgData[4] = {1,2,3,4};
+//unsigned char ucRXMsgData[4];
 uint16_t crc5_self;
 /*------------------------------------
  * FOC variables
@@ -95,6 +109,7 @@ Uint16
 QEP qep1 = QEP_DEFAULTS;
 
 int test=0;
+uint32_t status;
 
 interrupt void adca1_isr(void)
 {
@@ -106,18 +121,69 @@ interrupt void adca1_isr(void)
 //    }
 	//gpio29
 	EALLOW;
+#if (BUILDTYPE==LAUNCHPAD)
     GpioDataRegs.GPATOGGLE.bit.GPIO29=1;
+#elif (BUILDTYPE==PYMBOARD)
+    GpioDataRegs.GPDTOGGLE.bit.GPIO96=1;
+#endif
 	EDIS;
     AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1; //clear INT1 flag
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
 }
+//
+// CAN B ISR - The interrupt service routine called when a CAN interrupt is
+//             triggered on CAN module B.
+//
+interrupt void canISR(void)
+{
+	rxMsgCount++;
+
+    // Read the CAN-B interrupt status to find the cause of the interrupt
+    status = CANIntStatus(CAN_BASE, CAN_INT_STS_CAUSE);
+    // If the cause is a controller status interrupt, then get the status
+    if(status == CAN_INT_INT0ID_STATUS)
+    {
+        // Read the controller status.  This will return a field of status
+        // error bits that can indicate various errors.  Error processing
+        // is not done in this example for simplicity.  Refer to the
+        // API documentation for details about the error status bits.
+        // The act of reading this status will clear the interrupt.
+        status = CANStatusGet(CAN_BASE, CAN_STS_CONTROL);
+        // Check to see if an error occurred.
+        if(((status  & ~(CAN_ES_RXOK)) != 8) && ((status  & ~(CAN_ES_RXOK)) != 7) &&
+           ((status  & ~(CAN_ES_RXOK)) != 0))
+        { // Set a flag to indicate some errors may have occurred.
+            errorFlag = 1;
+        }
+    }
+    // Check if the cause is the CAN-B receive message object 1
+    else if(status == RX_MSG_OBJ_ID)
+    {
+        // Get the received message
+        CANMessageGet(CAN_BASE, RX_MSG_OBJ_ID, &sRXCAN_SP, true);
+        // Getting to this point means that the RX interrupt occurred on
+        // message object 1, and the message RX is complete.  Clear the
+        // message object interrupt.
+        CANIntClear(CAN_BASE, RX_MSG_OBJ_ID);
+        // Increment a counter to keep track of how many messages have been
+        // received. In a real application this could be used to set flags to
+        // indicate when a message is received.
+//        rxMsgCount++;
+        // Since the message was received, clear any error flags.
+        errorFlag = 0;
+    }
+    // If something unexpected caused the interrupt, this would handle it.
+    else
+    {/* Spurious interrupt handling can go here.*/}
+    // Clear the global interrupt flag for the CAN interrupt line
+    CANGlobalIntClear(CAN_BASE, CAN_GLB_INT_CANINT0);
+    // Acknowledge this interrupt located in group 9
+    PieCtrlRegs.PIEACK.all = PIEACK_GROUP9;
+}
+
 
 void main(void)
 {
-
-//    unsigned int DCVoltage =0xF00F;
-
-
     volatile int status = 0;
 
 //    volatile FILE *fid;
@@ -126,7 +192,6 @@ void main(void)
     InitSysCtrl();
 
     InitLED();
-
 
     // Disable interrupts
     DINT;
@@ -146,35 +211,34 @@ void main(void)
 
 
     //TODO GPIO CAN initializing
-//    CAN_A_init();
+    CAN_init();
 
+#if (BUILDTYPE==LAUNCHPAD)
     // init gd3000
     mc34_init();
+#endif
 
     // GPIO&Understand PWM initializing
     epwm_init();
 
-
     //TODO understand&GPIO ADC DAC initializing
-//    InitGpio();
     EALLOW;
-//    GpioCtrlRegs.GPALOCK.bit.GPIO29=0;
-        GpioCtrlRegs.GPAMUX2.bit.GPIO29=0;
-        GpioCtrlRegs.GPADIR.bit.GPIO29=1;
-//    GPIO_SetupPinOptions(29, GPIO_OUTPUT, GPIO_PUSHPULL);  // 方向为输出
-//	GPIO_SetupPinMux(29, GPIO_MUX_CPU1, 1);
+#if (BUILDTYPE==LAUNCHPAD)
+	GpioCtrlRegs.GPAMUX2.bit.GPIO29=0;
+	GpioCtrlRegs.GPADIR.bit.GPIO29=1;
 	GpioDataRegs.GPATOGGLE.bit.GPIO29=1;
-
-
+#elif (BUILDTYPE==PYMBOARD)
+	GpioCtrlRegs.GPDMUX1.bit.GPIO96=0;
+	GpioCtrlRegs.GPDDIR.bit.GPIO96=1;
+	GpioDataRegs.GPDTOGGLE.bit.GPIO96=1;
+#endif
     EDIS;
+
     adc_init();
     adc_dac_configure();
 
 	// GPIO Initialize UART
 	uart_init();
-
-    // SPI initializing
-//    spi_init();
 
     //TODO GPIO reset encoder
 //    enDat_init();
@@ -208,9 +272,21 @@ void main(void)
 //	PieVectTable.ADCC1_INT = &ResolverISR;
 	PieVectTable.EPWM11_INT = &FOC_Fast_ISR;
 	PieVectTable.ADCA1_INT = &adca1_isr; //function for ADCA interrupt 1
+#if (BUILDTYPE==LAUNCHPAD)
+	PieVectTable.CANB0_INT = canISR;
+#elif (BUILDTYPE==PYMBOARD)
+	PieVectTable.CANA0_INT = canISR;
+#endif
+
 
 	PieCtrlRegs.PIEIER3.bit.INTx11 = 1;  // Enable PWM11INT in PIE group 3 priority 11
-	PieCtrlRegs.PIEIER1.bit.INTx1 = 1;   //priority 1
+	PieCtrlRegs.PIEIER1.bit.INTx1 = 1;   // adca1 priority 1
+
+#if (BUILDTYPE==LAUNCHPAD)
+	PieCtrlRegs.PIEIER9.bit.INTx7 = 1;   //can b interrupt priority 7
+#elif (BUILDTYPE==PYMBOARD)
+	PieCtrlRegs.PIEIER9.bit.INTx5 = 1;   //can a interrupt priority 5
+#endif
 //	PieCtrlRegs.PIEIER1.bit.INTx3  = 1;  // Enable ADCC1INT in PIE group 1
 
 	EPwm11Regs.ETCLR.bit.INT=1;
@@ -230,20 +306,21 @@ void main(void)
 	//TODO PIEgroup Enable interrupts
 	IER |= M_INT3; // Enable group 3 interrupts
 	IER |= M_INT1; // Enable group 1 interrupts
+	IER |= M_INT9; // Enable group 9 interrupts
     EINT;  // Enable Global interrupt INTM
     ERTM;  // Enable Global realtime interrupt DBGM
 
 
     while(1)
     {
-        GPIO_WritePin(BLINKY_LED_GPIO, 0);
+        GPIO_WritePin(STATE_LED_GPIO, 0);
 //        SCIPuts("\r\n ============Message Start===========.\r\n", -1);
 
         DELAY_US(50*500);
 
 //        state_table[FOC.ctrlState.event][FOC.ctrlState.state](&FOC);
 
-        GPIO_WritePin(BLINKY_LED_GPIO, 1);
+        GPIO_WritePin(STATE_LED_GPIO, 1);
 
         DELAY_US(50*500);
 
@@ -316,19 +393,7 @@ interrupt void FOC_Fast_ISR(void){
 			}
 		}
 	} // end else if (lsw=0)
-//	if(!RunMotor)
-//		lsw = 0;
-//	else if (lsw == 0)
-//	{
-//		// for restarting from (RunMotor = 0)
-//		rc1.TargetValue =  rc1.SetpointValue = 0;
-//
-//#if POSITION_ENCODER==QEP_POS_ENCODER
-//		lsw = 1;   // for QEP, spin the motor to find the index pulse
-//#else
-//		lsw  = 2;  // for absolute encoders no need for lsw=1
-//#endif
-//	} // end else if (lsw=0)
+
 
 // ------------------------------------------------------------------------------
 //  Connect inputs of the RMP module and call the ramp control macro
@@ -351,9 +416,9 @@ interrupt void FOC_Fast_ISR(void){
 //	Connect inputs of the CLARKE module and call the clarke transformation macro
 // ------------------------------------------------------------------------------
 //	currentSensorSuite();
-	current_sensor.As   = (float)IFB_LEMV_PPB* ADC_PU_PPB_SCALE_FACTOR * LEM_TO_SHUNT;
-	current_sensor.Bs   = (float)IFB_LEMW_PPB* ADC_PU_PPB_SCALE_FACTOR * LEM_TO_SHUNT;
-	current_sensor.Cs   = (float)IFB_LEMU_PPB* ADC_PU_PPB_SCALE_FACTOR * LEM_TO_SHUNT;
+	current_sensor.As   = (float)IFB_LEMV_PPB* ADC_PU_PPB_SCALE_FACTOR * current_gain[0];
+	current_sensor.Bs   = (float)IFB_LEMW_PPB* ADC_PU_PPB_SCALE_FACTOR * current_gain[1];
+	current_sensor.Cs   = (float)IFB_LEMU_PPB* ADC_PU_PPB_SCALE_FACTOR * current_gain[2];
 			//-current_sensor[LEM_CURRENT_SENSE-1].Cs-current_sensor[LEM_CURRENT_SENSE-1].Bs;
 
 	clarke1.As = current_sensor.As; // Phase A curr.
@@ -369,47 +434,47 @@ interrupt void FOC_Fast_ISR(void){
 // ----------------------------------
 // lsw = 0 ---> Alignment Routine
 // ----------------------------------
-#if (POSITION_ENCODER == QEP_POS_ENCODER)
-	if (lsw == 0)
-	{
-		// during alignment, assign the current shaft position as initial position
-		EQep1Regs.QPOSCNT = 0;
-		EQep1Regs.QCLR.bit.IEL = 1;  // Reset position cnt for QEP
-	} // end if (lsw=0)
-
-// ******************************************************************************
-//    Detect calibration angle and call the QEP module
-// ******************************************************************************
-	// for once the QEP index pulse is found, go to lsw=2
-	if(lsw==1)
-	{
-		if (EQep1Regs.QFLG.bit.IEL == 1)			// Check the index occurrence
-		{
-			qep1.CalibratedAngle=EQep1Regs.QPOSILAT;
-//			EQep1Regs.QPOSINIT = EQep1Regs.QPOSILAT; //new
-//			EQep1Regs.QEPCTL.bit.IEI = IEI_RISING;   // new
-			lsw=2;
-		}   // Keep the latched pos. at the first index
-	}
-
-	if (lsw!=0){
-		QEP_MACRO(1,qep1);
-	}
-
-	// Reverse the sense of position if needed - comment / uncomment accordingly
-	// Position Sense as is
-	posEncElecTheta[QEP_POS_ENCODER] = qep1.ElecTheta;
-	posEncMechTheta[QEP_POS_ENCODER] = qep1.MechTheta;
-
-//	// Position Sense Reversal
-//	posEncElecTheta[QEP_POS_ENCODER] = 1.0 - qep1.ElecTheta;
-//	posEncMechTheta[QEP_POS_ENCODER] = 1.0 - qep1.MechTheta;
-#endif
-// ------------------------------------------------------------------------------
-//    Connect inputs of the SPEED_FR module and call the speed calculation macro
-// ------------------------------------------------------------------------------
-	speed1.ElecTheta = posEncElecTheta[POSITION_ENCODER];
-	SPEED_FR_MACRO(speed1)
+//#if (POSITION_ENCODER == QEP_POS_ENCODER)
+//	if (lsw == 0)
+//	{
+//		// during alignment, assign the current shaft position as initial position
+//		EQep1Regs.QPOSCNT = 0;
+//		EQep1Regs.QCLR.bit.IEL = 1;  // Reset position cnt for QEP
+//	} // end if (lsw=0)
+//
+//// ******************************************************************************
+////    Detect calibration angle and call the QEP module
+//// ******************************************************************************
+//	// for once the QEP index pulse is found, go to lsw=2
+//	if(lsw==1)
+//	{
+//		if (EQep1Regs.QFLG.bit.IEL == 1)			// Check the index occurrence
+//		{
+//			qep1.CalibratedAngle=EQep1Regs.QPOSILAT;
+////			EQep1Regs.QPOSINIT = EQep1Regs.QPOSILAT; //new
+////			EQep1Regs.QEPCTL.bit.IEI = IEI_RISING;   // new
+//			lsw=2;
+//		}   // Keep the latched pos. at the first index
+//	}
+//
+//	if (lsw!=0){
+//		QEP_MACRO(1,qep1);
+//	}
+//
+//	// Reverse the sense of position if needed - comment / uncomment accordingly
+//	// Position Sense as is
+//	posEncElecTheta[QEP_POS_ENCODER] = qep1.ElecTheta;
+//	posEncMechTheta[QEP_POS_ENCODER] = qep1.MechTheta;
+//
+////	// Position Sense Reversal
+////	posEncElecTheta[QEP_POS_ENCODER] = 1.0 - qep1.ElecTheta;
+////	posEncMechTheta[QEP_POS_ENCODER] = 1.0 - qep1.MechTheta;
+//#endif
+//// ------------------------------------------------------------------------------
+////    Connect inputs of the SPEED_FR module and call the speed calculation macro
+//// ------------------------------------------------------------------------------
+//	speed1.ElecTheta = posEncElecTheta[POSITION_ENCODER];
+//	SPEED_FR_MACRO(speed1)
 
 // ------------------------------------------------------------------------------
 //  Connect inputs of the PARK module and call the park trans. macro
@@ -418,8 +483,8 @@ interrupt void FOC_Fast_ISR(void){
 	park1.Beta   = clarke1.Beta;
 	if(lsw==0) park1.Angle = 0;
 	else
-//		park1.Angle  = rg1.Out;
-		park1.Angle  = posEncElecTheta[POSITION_ENCODER];
+		park1.Angle  = rg1.Out;
+//		park1.Angle  = posEncElecTheta[POSITION_ENCODER];
 
 	park1.Sine   = __sinpuf32(park1.Angle);
 	park1.Cosine = __cospuf32(park1.Angle);
@@ -457,8 +522,6 @@ interrupt void FOC_Fast_ISR(void){
 	ipark1.Sine=park1.Sine;
     ipark1.Cosine=park1.Cosine;
 	IPARK_MACRO(ipark1)
-
-
 
 // ------------------------------------------------------------------------------
 //  Connect inputs of the SVGEN_DQ module and call the space-vector gen. macro
@@ -512,16 +575,57 @@ interrupt void FOC_Fast_ISR(void){
 // ------------------------------------------------------------------------------
 	DLOG_4CH_F_FUNC(&dlog_4ch1);
 
-//	if(IsrTxTicker==49){
-//		IsrTxTicker=0;
+	if(IsrTxTicker==49){
+		IsrTxTicker=0;
+		//Error&Enabled
+		txMsgData1[0]=((ActualValues1.Enabled<<1)&ActualValues1.Error);
+		//DCVoltage
+		txMsgData1[1]=((ActualValues1.DCVoltage&0xFF00)>>8);
+		txMsgData1[2]=(ActualValues1.DCVoltage&0x00FF);
+		//ActualTorque
+		txMsgData1[3]=((ActualValues1.ActualTorque&0xFF00)>>8);
+		txMsgData1[4]=(ActualValues1.ActualTorque&0x00FF);
+		//ActualVelocity
+		txMsgData1[5]=((ActualValues1.ActualVelocity&0xFF00)>>8);
+		txMsgData1[6]=(ActualValues1.ActualVelocity&0x00FF);
+		//Diagnostic
+		txMsgData1[7]=(ActualValues1.Diagnostic);
+
+		//TempMotor
+		txMsgData2[0]=((ActualValues2.TempMotor&0xFF00)>>8);
+		txMsgData2[1]=(ActualValues2.TempMotor&0x00FF);
+		//TempInverter
+		txMsgData2[2]=((ActualValues2.TempInverter&0xFF00)>>8);
+		txMsgData2[3]=(ActualValues2.TempInverter&0x00FF);
+		//TempIGBT
+		txMsgData2[4]=((ActualValues2.TempIGBT&0xFF00)>>8);
+		txMsgData2[5]=(ActualValues2.TempIGBT&0x00FF);
+
+//        txMsgData1[0] = rxMsgData[0];
+//        txMsgData1[1] = rxMsgData[1];
+//        txMsgData2[0] = rxMsgData[2];
+//        txMsgData2[1] = rxMsgData[3];
+		txMsgData1[0] = 1;
+		txMsgData1[1] = 2;
+		txMsgData2[0] = 3;
+		txMsgData2[1] = 4;
+
+		// Transmit Message
+        CANMessageSet(CAN_BASE, TX_MSG1_OBJ_ID, &sTXCAN_AV1,
+                      MSG_OBJ_TYPE_TX);
+        CANMessageSet(CAN_BASE, TX_MSG2_OBJ_ID, &sTXCAN_AV2,
+                      MSG_OBJ_TYPE_TX);
+        // Increment the value in the transmitted message data.
+
 //		ActualValues1.DCVoltage=AdcaResultRegs.ADCRESULT0;
 //		ActualValues1.ActualTorque=AdcbResultRegs.ADCRESULT0;
 //		ActualValues1.ActualVelocity=AdccResultRegs.ADCRESULT0;
-//		ACTUALVALUE1_uart_TX(&ActualValues1, UARTA_BASE);
+		ACTUALVALUE_uart_TX(txMsgData1, UARTA_BASE,ActualValues1.Address);
+		ACTUALVALUE_uart_TX(txMsgData2, UARTA_BASE,ActualValues2.Address);
 //		ACTUALVALUE2_uart_TX(&ActualValues2, UARTA_BASE);
-//	}
-//	else
-//		IsrTxTicker++;
+	}
+	else
+		IsrTxTicker++;
 
 	EPwm11Regs.ETCLR.bit.INT = 1;
     PieCtrlRegs.PIEACK.all   = PIEACK_GROUP3;
@@ -534,21 +638,11 @@ interrupt void FOC_Fast_ISR(void){
 //
 //	if(ADC_1.ISR.B.EOCTU == 1)
 //	{
-//		ADC_1.ISR.B.EOCTU = 1;
-//
-//
 //		//get phase current
 //		PhCurrent3Ph_get_data(&FOC.MPC5744P_HW.phCurrents,&FOC.iAbcFbck, I_MAX);
-//		//PhCurrent2Ph_get_data(&FOC.MPC5744P_HW.phCurrents,&FOC.iAbcFbck, I_MAX);
-//
 //		//get dc bus voltage
-//		DcbVoltage_get_data(&FOC.MPC5744P_HW.uDcb,&FOC.uDcbFbck,U_DCB_MAX);
 //
 //		//get temperatures
-//		 temp_get_data(&FOC.MPC5744P_HW.temp,&FOC.tempFbck);
-//
-//		//get LV power source voltage
-//
 //	}
 //
 //	//get safety logic states
@@ -753,49 +847,84 @@ void InitLED()
 	GPIO_SetupPinMux(31, GPIO_MUX_CPU1, 0);
 
 #elif (BUILDTYPE==PYMBOARD)
-	GPIO_SetupPinOptions(105, GPIO_OUTPUT, GPIO_PUSHPULL);  // 方向为输出
-	GPIO_SetupPinMux(105, GPIO_MUX_CPU1, 0);                // 选择引脚功能为GPIO功能
+	GPIO_SetupPinOptions(105, GPIO_OUTPUT, GPIO_PUSHPULL);  // ERROR
+	GPIO_SetupPinMux(105, GPIO_MUX_CPU1, 0);
 
-	GPIO_SetupPinOptions(107, GPIO_OUTPUT, GPIO_PUSHPULL);
+	GPIO_SetupPinOptions(107, GPIO_OUTPUT, GPIO_PUSHPULL);  // WARN
 	GPIO_SetupPinMux(107, GPIO_MUX_CPU1, 0);
 
-	GPIO_SetupPinOptions(106, GPIO_OUTPUT, GPIO_PUSHPULL);
+	GPIO_SetupPinOptions(106, GPIO_OUTPUT, GPIO_PUSHPULL);  // STATE
 	GPIO_SetupPinMux(106, GPIO_MUX_CPU1, 0);
 #endif
 
 }
-void CAN_A_init()
+// TODO CAN
+void CAN_init()
 {
-//	CANInit(CANA_BASE);
-//	// 选择CAN模块的时钟源
-//	CANClkSourceSelect(CANA_BASE, 0);
-//	//配置CAN的比特率，时钟CAN bus is set to 500 kHz
-//	CANBitRateSet(CANA_BASE, 200000000, 500000);
+#if (BUILDTYPE==LAUNCHPAD)
+	GPIO_SetupPinMux(17, GPIO_MUX_CPU1, 2); //GPIO17 -  CANRXB
+	GPIO_SetupPinOptions(17, GPIO_INPUT, GPIO_ASYNC);
+	GPIO_SetupPinMux(12, GPIO_MUX_CPU1, 2);  //GPIO12 - CANTXB
+	GPIO_SetupPinOptions(12, GPIO_OUTPUT, GPIO_PUSHPULL);
+#elif (BUILDTYPE==PYMBOARD)
+	GPIO_SetupPinMux(5, GPIO_MUX_CPU1, 6); //GPIO5 -  CANRXA
+	GPIO_SetupPinOptions(5, GPIO_INPUT, GPIO_ASYNC);
+	GPIO_SetupPinMux(4, GPIO_MUX_CPU1, 6);  //GPIO4 - CANTXA
+	GPIO_SetupPinOptions(4, GPIO_OUTPUT, GPIO_PUSHPULL);
+#endif
+
+	CANInit(CAN_BASE);
+	// 选择CAN模块的时钟源
+	CANClkSourceSelect(CAN_BASE, 0);
+	//配置CAN的比特率，时钟CAN bus is set to 500 kHz
+	CANBitRateSet(CAN_BASE, 200000000, 500000);
+    //
+    // Enable interrupts on the CAN B peripheral.
+    //
+    CANIntEnable(CAN_BASE, CAN_INT_MASTER | CAN_INT_ERROR | CAN_INT_STATUS);
+
 //	// Enable test mode and select external loopback
-//	HWREG(CANA_BASE + CAN_O_CTL) |= CAN_CTL_TEST;
-//	HWREG(CANA_BASE + CAN_O_TEST) = CAN_TEST_EXL;
-//	//使能CAN
-//	CANEnable(CANA_BASE);
-//	*(unsigned long *)ucTXMsgData = 0;
-//
-//	sTXCANMessage.ui32MsgID = 1;                      // CAN消息ID
-//	sTXCANMessage.ui32MsgIDMask = 0;                  // 无屏蔽
-//	sTXCANMessage.ui32Flags = MSG_OBJ_TX_INT_ENABLE;  // 使能中断
-//	sTXCANMessage.ui32MsgLen = sizeof(ucTXMsgData);   // 消息长度
-//	sTXCANMessage.pucMsgData = ucTXMsgData;           // 发送内容的指针地址
-//
-//	// Initialize the message object that will be used for recieving CAN
-//	// messages.
-//	*(unsigned long *)ucRXMsgData = 0;
-//	sRXCANMessage.ui32MsgID = 1;                      // CAN消息ID
-//	sRXCANMessage.ui32MsgIDMask = 0;                  //无屏蔽
-//	sRXCANMessage.ui32Flags = MSG_OBJ_NO_FLAGS;
-//	sRXCANMessage.ui32MsgLen = sizeof(ucRXMsgData);   //消息长度
-//	sRXCANMessage.pucMsgData = ucRXMsgData;           //接受内容的指针地址
-//
-//	//配置message object用于接受
-//	CANMessageSet(CANA_BASE, 2, &sRXCANMessage, MSG_OBJ_TYPE_RX);
+//	HWREG(CAN_BASE + CAN_O_CTL) |= CAN_CTL_TEST;
+//	HWREG(CAN_BASE + CAN_O_TEST) = CAN_TEST_EXL;
+    //
+    // Enable the CAN-B interrupt signal
+    //
+    CANGlobalIntEnable(CAN_BASE, CAN_GLB_INT_CANINT0);
+
+	sTXCAN_AV1.ui32MsgID = 0x00;                      // CAN消息ID
+	sTXCAN_AV1.ui32MsgIDMask = 0;                  // 无屏蔽
+	sTXCAN_AV1.ui32Flags = MSG_OBJ_NO_FLAGS;
+	sTXCAN_AV1.ui32MsgLen = MSG_DATA_LENGTH;   // 消息长度
+	sTXCAN_AV1.pucMsgData = txMsgData1;           // 发送内容的指针地址
+	sTXCAN_AV2.ui32MsgID = 0x04;
+	sTXCAN_AV2.ui32MsgIDMask = 0;
+	sTXCAN_AV2.ui32Flags = MSG_OBJ_NO_FLAGS;
+	sTXCAN_AV2.ui32MsgLen = MSG_DATA_LENGTH;
+	sTXCAN_AV2.pucMsgData = txMsgData2;
+
+	// Initialize the message object that will be used for recieving CAN
+	// messages.
+	sRXCAN_SP.ui32MsgID = 0x131;                      // CAN消息ID
+	sRXCAN_SP.ui32MsgIDMask = 0;                  //无屏蔽
+	sRXCAN_SP.ui32Flags = MSG_OBJ_RX_INT_ENABLE;// enable int
+	sRXCAN_SP.ui32MsgLen = MSG_DATA_LENGTH;   //消息长度
+	sRXCAN_SP.pucMsgData = rxMsgData;           //接受内容的指针地址
+
+	//配置message object用于接受
+	CANMessageSet(CAN_BASE, RX_MSG_OBJ_ID, &sRXCAN_SP, MSG_OBJ_TYPE_RX);
+    // Initialize the transmit message object data buffer to be sent
+//    txMsgData[0] = 0x12;
+//    txMsgData[1] = 0x34;
+//    txMsgData[2] = 0x56;
+//    txMsgData[3] = 0x78;
+//    rxMsgData[0] = 0x0;
+//	rxMsgData[1] = 0x0;
+//	rxMsgData[2] = 0x0;
+//	rxMsgData[3] = 0x0;
+	//使能CAN
+	CANEnable(CAN_BASE);
 }
+
 void mc34_init(){
 
 	EALLOW;
@@ -939,15 +1068,7 @@ void InitEPwm1ch_UpDwnCnt_CNF(int16 n, Uint16 period, int16 db)
 	(*ePWM[n]).CMPA.bit.CMPA = 0; // set duty 0% initially
 	(*ePWM[n]).CMPCTL.bit.SHDWAMODE = CC_SHADOW; // Load registers every ZERO
 	(*ePWM[n]).CMPCTL.bit.LOADAMODE = CC_CTR_ZERO;
-
-//	// Action Qualifier SubModule Registers
-//	(*ePWM[n]).AQCTLA.bit.CAU = AQ_CLEAR;   //output low
-//	(*ePWM[n]).AQCTLA.bit.CAD = AQ_SET;     //output high
-//
-//	// Active high complementary PWMs - Set up the deadband
-//	(*ePWM[n]).DBCTL.bit.IN_MODE  = DBA_ALL;
-//	(*ePWM[n]).DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
-//	(*ePWM[n]).DBCTL.bit.POLSEL   = DB_ACTV_HIC;
+#if (BUILDTYPE==LAUNCHPAD)
 	// Action Qualifier SubModule Registers
 	(*ePWM[n]).AQCTLA.bit.CAU = AQ_CLEAR;   //output low
 	(*ePWM[n]).AQCTLA.bit.CAD = AQ_SET;     //output high
@@ -956,6 +1077,16 @@ void InitEPwm1ch_UpDwnCnt_CNF(int16 n, Uint16 period, int16 db)
 	(*ePWM[n]).DBCTL.bit.IN_MODE  = DBA_ALL;
 	(*ePWM[n]).DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
 	(*ePWM[n]).DBCTL.bit.POLSEL   = DB_ACTV_LO;
+#elif (BUILDTYPE==PYMBOARD)
+	// Action Qualifier SubModule Registers
+	(*ePWM[n]).AQCTLA.bit.CAU = AQ_CLEAR;   //output low
+	(*ePWM[n]).AQCTLA.bit.CAD = AQ_SET;     //output high
+
+	// Active high complementary PWMs - Set up the deadband
+	(*ePWM[n]).DBCTL.bit.IN_MODE  = DBA_ALL;
+	(*ePWM[n]).DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
+	(*ePWM[n]).DBCTL.bit.POLSEL   = DB_ACTV_HIC;
+#endif
 	(*ePWM[n]).DBRED.bit.DBRED = db;
 	(*ePWM[n]).DBFED.bit.DBFED = db;
 
@@ -1059,17 +1190,6 @@ void adc_init()
         acqps = 63; //16位差分模式下采样时间最快320ns,ACQPS>=63
     }
     //Select the channels to convert and end of conversion flag
-    //ADCA
-//    EALLOW;
-//    AdcaRegs.ADCSOC0CTL.bit.CHSEL = 0;  //SOC0 will convert pin ADCINA0
-//    AdcaRegs.ADCSOC0CTL.bit.ACQPS = acqps; //sample window is acqps + 1 SYSCLK cycles
-//    AdcaRegs.ADCSOC1CTL.bit.CHSEL = 1;  //SOC1 will convert pin A1
-//    AdcaRegs.ADCSOC1CTL.bit.ACQPS = acqps; //sample window is acqps + 1 SYSCLK cycles
-//
-//    AdcaRegs.ADCINTSEL1N2.bit.INT1SEL = 1; //end of SOC1 will set INT1 flag
-//    AdcaRegs.ADCINTSEL1N2.bit.INT1E = 1;   //enable INT1 flag
-//    AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1; //make sure INT1 flag is cleared
-//    EDIS;
 }
 void adc_dac_configure()
 {
@@ -1243,10 +1363,14 @@ void uart_init()
 	// Initialize GPIO
 	EALLOW;
 #if (BUILDTYPE==PYMBOARD)
-	GpioCtrlRegs.GPEMUX1.bit.GPIO135 = 2;
-	GpioCtrlRegs.GPEMUX1.bit.GPIO136 = 2;
-	GpioCtrlRegs.GPEGMUX1.bit.GPIO135 = 1;
-	GpioCtrlRegs.GPEGMUX1.bit.GPIO136 = 1;
+	GpioCtrlRegs.GPAMUX2.bit.GPIO28 = 1;
+	GpioCtrlRegs.GPAMUX2.bit.GPIO29 = 1;
+	GpioCtrlRegs.GPAGMUX2.bit.GPIO28 = 0;
+	GpioCtrlRegs.GPAGMUX2.bit.GPIO29 = 0;
+//	GpioCtrlRegs.GPEMUX1.bit.GPIO135 = 2;
+//	GpioCtrlRegs.GPEMUX1.bit.GPIO136 = 2;
+//	GpioCtrlRegs.GPEGMUX1.bit.GPIO135 = 1;
+//	GpioCtrlRegs.GPEGMUX1.bit.GPIO136 = 1;
 	//launchpad
 #elif (BUILDTYPE==LAUNCHPAD)
 	GpioCtrlRegs.GPBMUX1.bit.GPIO42 = 3;
@@ -1271,13 +1395,12 @@ void uart_init()
 	SciaRegs.SCICTL2.bit.RXBKINTENA =1;
 
 	SciaRegs.SCIHBAUD.all    =0x0000;  // 115200 baud @LSPCLK = 22.5MHz (90 MHz SYSCLK).
-    SciaRegs.SCILBAUD.all    =53;
+    SciaRegs.SCILBAUD.all    =0x0036;//53;
 
 	SciaRegs.SCICTL1.all =0x0023;  // Relinquish SCI from Reset
 
     // Enable the UART.
     UARTEnable(UARTA_BASE);
-
 }
 
 //TODO
@@ -1481,11 +1604,14 @@ _iq ramper(_iq in, _iq out, _iq rampDelta) {
 }
 
 void param_init(){
+
 // ****************************************************************************
 // ****************************************************************************
 // Initialize QEP module
 // ****************************************************************************
 // ****************************************************************************
+
+#if (BUILDTYPE==LAUNCHPAD)
 	// Setup GPIO for QEP operation
 	GPIO_SetupPinOptions(20, GPIO_INPUT, GPIO_SYNC);
 	GPIO_SetupPinMux(20,0,1);
@@ -1498,14 +1624,14 @@ void param_init(){
 
 	GPIO_SetupPinOptions(99, GPIO_INPUT, GPIO_SYNC);
 	GPIO_SetupPinMux(99,0,5);
-//	InitEQep1Gpio();
+#endif
 
 // ****************************************************************************
 // ****************************************************************************
 // Paramaeter Initialisation
 // ****************************************************************************
 // ****************************************************************************
-
+#if (BUILDTYPE==LAUNCHPAD)
 	// Init QEP parameters
 	qep1.LineEncoder = 1000; // these are the number of slots in the QEP encoder
 	qep1.MechScaler  = _IQ30(0.25/qep1.LineEncoder);
@@ -1513,6 +1639,7 @@ void param_init(){
 	qep1.CalibratedAngle = 0;
 	QEP_INIT_MACRO(1,qep1)
 	EQep1Regs.QEPCTL.bit.IEI = 0;        // disable POSCNT=POSINIT @ Index
+#endif
 
 //	// Init RESOLVER parameters
 //	resolver1.StepsPerTurn = RESOLVER_STEPS_PER_TURN;
@@ -1547,11 +1674,17 @@ void param_init(){
 
 	// Set mock REFERENCES for Speed and Iq loops
 	SpeedRef = 0.1;
-
+#if (BUILDTYPE==LAUNCHPAD)
 	//DEVKIT offset:1.65V
 	offset_lemU  = 1.65;
 	offset_lemW  = 1.65;
 	offset_lemV  = 1.65;
+#elif (BUILDTYPE==PYMBOARD)
+	offset_lemU  = 1.5;//≈2.5*0.6
+	offset_lemW  = 1.5;
+	offset_lemV  = 1.5;
+#endif
+
 
 	for (OffsetCalCounter=0; OffsetCalCounter<20000; )
 	{

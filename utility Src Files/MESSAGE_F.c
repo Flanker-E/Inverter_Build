@@ -60,22 +60,14 @@ void ACTUALVALUE2_init(ACTUALVALUES2 *v){
 	v->Reserved0=0;
 	v->Reserved1=0;
 }
-void ACTUALVALUE1_uart_TX(ACTUALVALUES1 *v,uint32_t UART_BASE){
-    //address
-	UARTCharPut(UART_BASE, v->Address);
-	//Error&Enabled
-	UARTCharPut(UART_BASE, (v->Enabled<<1)&v->Error);
-	//DCVoltage
-	UARTCharPut(UART_BASE, (v->DCVoltage&0xFF00)>>8);
-	UARTCharPut(UART_BASE, v->DCVoltage&0x00FF);
-	//ActualTorque
-	UARTCharPut(UART_BASE, (v->ActualTorque&0xFF00)>>8);
-	UARTCharPut(UART_BASE, v->ActualTorque&0x00FF);
-	//ActualVelocity
-	UARTCharPut(UART_BASE, (v->ActualVelocity&0xFF00)>>8);
-	UARTCharPut(UART_BASE, v->ActualVelocity&0x00FF);
-	//Diagnostic
-	UARTCharPut(UART_BASE, v->Diagnostic);
+void ACTUALVALUE_uart_TX(unsigned char *av,uint32_t UART_BASE, unsigned char address){
+    int i;
+	//address
+	UARTCharPut(UART_BASE, address);
+	//actual values
+	for (i=0;i<8;i++){
+		UARTCharPut(UART_BASE, av[i]);
+	}
 	UARTCharPut(UART_BASE, '\r');
 	UARTCharPut(UART_BASE, '\n');
 }

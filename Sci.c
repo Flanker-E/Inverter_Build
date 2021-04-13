@@ -22,12 +22,12 @@
 void InitSciaGpio(void)
 {
 	EALLOW;
-	GpioCtrlRegs.GPBMUX1.bit.GPIO42 = 3;
-	GpioCtrlRegs.GPBMUX1.bit.GPIO43 = 3;
-	GpioCtrlRegs.GPBGMUX1.bit.GPIO42 = 3;
-	GpioCtrlRegs.GPBGMUX1.bit.GPIO43 = 3;
-//	GpioCtrlRegs.GPAMUX2.bit.GPIO28 = 1;
-//	GpioCtrlRegs.GPAMUX2.bit.GPIO29 = 1;
+//	GpioCtrlRegs.GPBMUX1.bit.GPIO42 = 3;
+//	GpioCtrlRegs.GPBMUX1.bit.GPIO43 = 3;
+//	GpioCtrlRegs.GPBGMUX1.bit.GPIO42 = 3;
+//	GpioCtrlRegs.GPBGMUX1.bit.GPIO43 = 3;
+	GpioCtrlRegs.GPAMUX2.bit.GPIO28 = 1;
+	GpioCtrlRegs.GPAMUX2.bit.GPIO29 = 1;
 	EDIS;
 }
 
